@@ -39,6 +39,14 @@ pub fn build(b: *std.Build) void {
     safety.addImport("core", core);
     safety.addImport("kinematics", kinematics);
 
+    // Create the HAL module
+    const hal = b.addModule("hal", .{
+        .root_source_file = b.path("src/hal/root.zig"),
+    });
+    hal.addImport("core", core);
+    hal.addImport("safety", safety);
+    hal.addImport("timing", timing);
+
     // Create the control module
     const control = b.addModule("control", .{
         .root_source_file = b.path("src/control/root.zig"),
@@ -47,12 +55,14 @@ pub fn build(b: *std.Build) void {
     control.addImport("kinematics", kinematics);
     control.addImport("safety", safety);
     control.addImport("timing", timing);
+    control.addImport("hal", hal);
 
     // Add dependencies to core
     core.addImport("timing", timing);
     core.addImport("kinematics", kinematics);
     core.addImport("safety", safety);
     core.addImport("control", control);
+    core.addImport("hal", hal);
 
     // Create the backend library
     const backend_lib = b.addStaticLibrary(.{
@@ -66,6 +76,7 @@ pub fn build(b: *std.Build) void {
     backend_lib.root_module.addImport("safety", safety);
     backend_lib.root_module.addImport("timing", timing);
     backend_lib.root_module.addImport("control", control);
+    backend_lib.root_module.addImport("hal", hal);
     b.installArtifact(backend_lib);
 
     // Create the backend executable
@@ -80,6 +91,7 @@ pub fn build(b: *std.Build) void {
     backend_exe.root_module.addImport("safety", safety);
     backend_exe.root_module.addImport("timing", timing);
     backend_exe.root_module.addImport("control", control);
+    backend_exe.root_module.addImport("hal", hal);
     backend_exe.linkLibrary(backend_lib);
     b.installArtifact(backend_exe);
 
