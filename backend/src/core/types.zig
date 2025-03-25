@@ -96,4 +96,87 @@ pub const EndEffectorPose = struct {
     position: CartesianPosition,
     /// Orientation in Euler angles
     orientation: Orientation,
+};
+
+/// Represents a 3D bounding box for collision detection
+pub const BoundingBox = struct {
+    /// Minimum point (x, y, z)
+    min: CartesianPosition,
+    /// Maximum point (x, y, z)
+    max: CartesianPosition,
+};
+
+/// Represents a robot link for collision detection
+pub const LinkGeometry = struct {
+    /// Link identifier
+    id: u8,
+    /// Bounding box for the link
+    bounds: BoundingBox,
+    /// Current position of the link's center
+    center: CartesianPosition,
+    /// Current orientation of the link
+    orientation: Orientation,
+};
+
+/// Link identifiers for collision detection
+pub const LinkId = enum(u8) {
+    base = 0,
+    shoulder = 1,
+    upper_arm = 2,
+    elbow = 3,
+    forearm = 4,
+    wrist_rotation = 5,
+    wrist_bend = 6,
+    tool_rotation = 7,
+    gripper = 8,
+};
+
+/// Link dimensions for collision detection
+pub const LinkDimensions = struct {
+    /// Link identifier
+    id: LinkId,
+    /// Length of the link in millimeters
+    length: f32,
+    /// Width of the link in millimeters
+    width: f32,
+    /// Height of the link in millimeters
+    height: f32,
+    /// Joint offset from previous link in millimeters
+    joint_offset: CartesianPosition,
+};
+
+/// Collision detection result
+pub const CollisionResult = struct {
+    /// Whether a collision was detected
+    collision_detected: bool,
+    /// Type of collision (self or environment)
+    collision_type: enum {
+        none,
+        self_collision,
+        environment_collision,
+    },
+    /// First colliding link
+    link1: ?LinkId,
+    /// Second colliding link (if self collision)
+    link2: ?LinkId,
+    /// Collision point in world coordinates
+    collision_point: ?CartesianPosition,
+    /// Minimum distance to collision (if no collision, distance to nearest obstacle)
+    min_distance: f32,
+    /// Joint angles at time of collision
+    joint_angles: [NUM_JOINTS]f32,
+};
+
+/// Collision detection configuration
+pub const CollisionConfig = struct {
+    /// Minimum allowed distance between links for self-collision
+    min_link_distance: f32,
+    /// Minimum allowed distance from environment obstacles
+    min_environment_distance: f32,
+    /// Whether to enable continuous collision detection
+    enable_continuous_detection: bool,
+    /// Update frequency for collision checks (Hz)
+    check_frequency: f32,
+    /// Link dimensions for collision detection
+    link_dimensions: [9]LinkDimensions,
 }; 

@@ -15,78 +15,125 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    // Create core module
-    const core_mod = b.createModule(.{
+    // Create the utils module first since other modules depend on it
+    const utils = b.addModule("utils", .{
+        .root_source_file = b.path("src/utils/root.zig"),
+    });
+
+    // Create the timing module first since core depends on it
+    const timing = b.addModule("timing", .{
+        .root_source_file = b.path("src/timing/root.zig"),
+    });
+    timing.addImport("utils", utils);
+
+    // Create the kinematics module first since control depends on it
+    const kinematics = b.addModule("kinematics", .{
+        .root_source_file = b.path("src/kinematics/root.zig"),
+    });
+    kinematics.addImport("utils", utils);
+
+    // Create the safety module first since control depends on it
+    const safety = b.addModule("safety", .{
+        .root_source_file = b.path("src/safety/root.zig"),
+    });
+    safety.addImport("utils", utils);
+    safety.addImport("kinematics", kinematics);
+
+    // Create the control module with all its dependencies
+    const control = b.addModule("control", .{
+        .root_source_file = b.path("src/control/root.zig"),
+    });
+    control.addImport("utils", utils);
+    control.addImport("kinematics", kinematics);
+    control.addImport("safety", safety);
+
+    // Create the core module with all its dependencies
+    const core = b.addModule("core", .{
         .root_source_file = b.path("src/core/root.zig"),
+    });
+    core.addImport("utils", utils);
+    core.addImport("timing", timing);
+    core.addImport("control", control);
+    core.addImport("kinematics", kinematics);
+    core.addImport("safety", safety);
+
+    // Update other modules' dependencies to include core
+    control.addImport("core", core);
+    kinematics.addImport("core", core);
+    safety.addImport("core", core);
+
+    // Create the HAL module
+    const hal = b.addModule("hal", .{
+        .root_source_file = b.path("src/hal/root.zig"),
+    });
+    hal.addImport("core", core);
+    hal.addImport("safety", safety);
+    hal.addImport("timing", timing);
+    hal.addImport("utils", utils);
+
+    // Create the physics module
+    const physics = b.addModule("physics", .{
+        .root_source_file = b.path("src/physics/root.zig"),
+    });
+    physics.addImport("core", core);
+    physics.addImport("utils", utils);
+
+    // Create the communication module
+    const communication = b.addModule("communication", .{
+        .root_source_file = b.path("src/communication/root.zig"),
+    });
+    communication.addImport("core", core);
+    communication.addImport("utils", utils);
+
+    // Create the backend library
+    const backend_lib = b.addStaticLibrary(.{
+        .name = "backend",
+        .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    // Create main module
-    const exe_mod = b.createModule(.{
+    // Add all modules as dependencies
+    backend_lib.root_module.addImport("core", core);
+    backend_lib.root_module.addImport("kinematics", kinematics);
+    backend_lib.root_module.addImport("safety", safety);
+    backend_lib.root_module.addImport("timing", timing);
+    backend_lib.root_module.addImport("hal", hal);
+    backend_lib.root_module.addImport("control", control);
+    backend_lib.root_module.addImport("physics", physics);
+    backend_lib.root_module.addImport("communication", communication);
+    backend_lib.root_module.addImport("utils", utils);
+
+    b.installArtifact(backend_lib);
+
+    // Create the backend executable
+    const backend_exe = b.addExecutable(.{
+        .name = "backend",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    // Add core module as a dependency
-    exe_mod.addImport("core", core_mod);
+    // Link against the library
+    backend_exe.linkLibrary(backend_lib);
 
-    // Now, we will create a static library based on the module we created above.
-    // This creates a `std.Build.Step.Compile`, which is the build step responsible
-    // for actually invoking the compiler.
-    const lib = b.addLibrary(.{
-        .linkage = .static,
-        .name = "backend",
-        .root_module = core_mod,
-    });
+    // Add all modules as dependencies to the executable
+    backend_exe.root_module.addImport("core", core);
+    backend_exe.root_module.addImport("kinematics", kinematics);
+    backend_exe.root_module.addImport("safety", safety);
+    backend_exe.root_module.addImport("timing", timing);
+    backend_exe.root_module.addImport("hal", hal);
+    backend_exe.root_module.addImport("control", control);
+    backend_exe.root_module.addImport("physics", physics);
+    backend_exe.root_module.addImport("communication", communication);
+    backend_exe.root_module.addImport("utils", utils);
 
-    // This declares intent for the library to be installed into the standard
-    // location when the user invokes the "install" step (the default step when
-    // running `zig build`).
-    b.installArtifact(lib);
+    b.installArtifact(backend_exe);
 
-    // Create executable
-    const exe = b.addExecutable(.{
-        .name = "backend",
-        .root_module = exe_mod,
-    });
-
-    // This declares intent for the executable to be installed into the
-    // standard location when the user invokes the "install" step (the default
-    // step when running `zig build`).
-    b.installArtifact(exe);
-
-    // Create run command
-    const run_cmd = b.addRunArtifact(exe);
+    // Create a run step
+    const run_cmd = b.addRunArtifact(backend_exe);
     run_cmd.step.dependOn(b.getInstallStep());
 
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
-
-    // Add run step
-    const run_step = b.step("run", "Run the app");
+    const run_step = b.step("run", "Run the backend");
     run_step.dependOn(&run_cmd.step);
-
-    // Creates a step for unit testing. This only builds the test executable
-    // but does not run it.
-    const lib_unit_tests = b.addTest(.{
-        .root_module = core_mod,
-    });
-
-    const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
-
-    const exe_unit_tests = b.addTest(.{
-        .root_module = exe_mod,
-    });
-
-    const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
-
-    // Similar to creating the run step earlier, this exposes a `test` step to
-    // the `zig build --help` menu, providing a way for the user to request
-    // running the unit tests.
-    const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_lib_unit_tests.step);
-    test_step.dependOn(&run_exe_unit_tests.step);
 }

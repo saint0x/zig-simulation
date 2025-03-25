@@ -1,8 +1,9 @@
 const std = @import("std");
+const core = @import("core");
 const types = @import("types.zig");
 
-const JointConfig = types.JointConfig;
-const JointState = types.JointState;
+const JointConfig = core.types.JointConfig;
+const JointState = core.types.JointState;
 
 /// PID Controller for joint control
 pub const PIDController = struct {
