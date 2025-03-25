@@ -1,13 +1,32 @@
-pub const communication = @import("communication.zig");
-pub const motor_driver = @import("motor_driver.zig");
-
 const std = @import("std");
+
+// HAL initialization and system
+const init_module = @import("init.zig");
+pub const HalSystem = init_module.HalSystem;
+pub const init = init_module.init;
+
+// Hardware communication
+pub const communication = @import("communication.zig");
+pub const SerialComm = communication.SerialComm;
+pub const UsbComm = communication.UsbComm;
+
+// Motor control
+pub const motor_module = @import("motor.zig");
+pub const MotorDriver = motor_module.MotorDriver;
+pub const MotorConfig = motor_module.MotorConfig;
+
+// Sensor interfaces
+pub const sensors = @import("sensors.zig");
+pub const JointSensor = sensors.JointSensor;
+pub const ForceSensor = sensors.ForceSensor;
+pub const PositionSensor = sensors.PositionSensor;
+
 const types = @import("core").types;
 const safety = @import("safety");
 
 pub const HardwareInterface = struct {
     comm: *communication.CommunicationInterface,
-    motors: [types.NUM_JOINTS]*motor_driver.MotorDriver,
+    motors: [types.NUM_JOINTS]*motor_module.MotorDriver,
     allocator: std.mem.Allocator,
 
     const Self = @This();
@@ -15,7 +34,7 @@ pub const HardwareInterface = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         comm_config: communication.CommConfig,
-        motor_configs: [types.NUM_JOINTS]motor_driver.MotorConfig,
+        motor_configs: [types.NUM_JOINTS]motor_module.MotorConfig,
         safety_monitor: *safety.SafetyMonitor,
     ) !*Self {
         const self = try allocator.create(Self);
@@ -25,7 +44,7 @@ pub const HardwareInterface = struct {
         
         // Initialize motor drivers
         for (motor_configs, 0..) |config, i| {
-            self.motors[i] = try motor_driver.MotorDriver.init(allocator, config, safety_monitor);
+            self.motors[i] = try motor_module.MotorDriver.init(allocator, config, safety_monitor);
         }
         
         self.allocator = allocator;
@@ -34,21 +53,21 @@ pub const HardwareInterface = struct {
 
     pub fn deinit(self: *Self) void {
         self.comm.deinit();
-        for (self.motors) |motor| {
-            motor.deinit();
+        for (self.motors) |m| {
+            m.deinit();
         }
         self.allocator.destroy(self);
     }
 
     pub fn enableMotors(self: *Self) !void {
-        for (self.motors) |motor| {
-            try motor.enable();
+        for (self.motors) |m| {
+            try m.enable();
         }
     }
 
     pub fn disableMotors(self: *Self) void {
-        for (self.motors) |motor| {
-            motor.disable();
+        for (self.motors) |m| {
+            m.disable();
         }
     }
 
@@ -62,9 +81,9 @@ pub const HardwareInterface = struct {
         try self.comm.sendJointCommand(positions);
 
         // Update motor states
-        for (self.motors, 0..) |motor, i| {
+        for (self.motors, 0..) |m, i| {
             const max_vel = if (max_velocities) |vels| vels[i] else null;
-            try motor.setPosition(positions[i], max_vel);
+            try m.setPosition(positions[i], max_vel);
         }
     }
 
@@ -75,10 +94,10 @@ pub const HardwareInterface = struct {
             .torque = [_]f32{0} ** types.NUM_JOINTS,
         };
 
-        for (self.motors, 0..) |motor, i| {
-            state.position[i] = motor.getCurrentPosition();
-            state.velocity[i] = motor.getCurrentVelocity();
-            state.torque[i] = motor.getCurrentTorque();
+        for (self.motors, 0..) |m, i| {
+            state.position[i] = m.getCurrentPosition();
+            state.velocity[i] = m.getCurrentVelocity();
+            state.torque[i] = m.getCurrentTorque();
         }
 
         return state;

@@ -108,10 +108,10 @@ pub const MotorDriver = struct {
         self.state.position += self.state.velocity * dt;
         
         // Simulate current based on load
-        self.state.current = @fabs(position_error) * 0.5; // Simplified current model
+        self.state.current = @abs(position_error) * 0.5; // Simplified current model
         
         // Simulate temperature
-        self.state.temperature += @fabs(self.state.current) * 0.001; // Simple thermal model
+        self.state.temperature += @abs(self.state.current) * 0.001; // Simple thermal model
         self.state.temperature -= (self.state.temperature - 25.0) * 0.0001; // Cooling
         
         // Check limits and set error flags

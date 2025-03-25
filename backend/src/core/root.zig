@@ -1,8 +1,14 @@
 const std = @import("std");
 
+// Core initialization and system
+const init_module = @import("init.zig");
+pub const CoreSystem = init_module.CoreSystem;
+pub const init = init_module.init;
+
 // Core types and error handling
 pub const types = @import("types.zig");
 pub const error_handler = @import("error.zig");
+pub const timing = @import("timing");
 
 // Control system
 pub const control = @import("control");
@@ -19,14 +25,13 @@ pub const collision_detection = kinematics.collision_detection;
 // Safety
 pub const safety = @import("safety");
 
-// Timing
-pub const timing = @import("timing");
-
-// Re-export commonly used types for convenience
-pub const TimingConfig = types.TimingConfig;
-pub const TimeUnit = types.TimeUnit;
-pub const TimerConfig = types.TimerConfig;
+// Re-export timing types
 pub const TimingSystem = timing.TimingSystem;
+pub const TimeUnit = timing.TimeUnit;
+pub const TimerConfig = timing.TimerConfig;
+pub const TimingConfig = timing.TimingConfig;
+
+// Re-export core types
 pub const JointConfig = types.JointConfig;
 pub const JointState = types.JointState;
 pub const RobotState = types.RobotState;
@@ -34,6 +39,14 @@ pub const RobotStatus = types.RobotStatus;
 pub const CartesianPosition = types.CartesianPosition;
 pub const Orientation = types.Orientation;
 pub const EndEffectorPose = types.EndEffectorPose;
+pub const BoundingBox = types.BoundingBox;
+pub const LinkGeometry = types.LinkGeometry;
+pub const LinkId = types.LinkId;
+pub const LinkDimensions = types.LinkDimensions;
+pub const CollisionResult = types.CollisionResult;
+pub const CollisionConfig = types.CollisionConfig;
+
+// Re-export commonly used types for convenience
 pub const PIDController = control.PIDController;
 pub const JointManager = control.JointManager;
 pub const MotionPlanner = control.MotionPlanner;

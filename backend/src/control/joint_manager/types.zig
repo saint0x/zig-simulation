@@ -89,17 +89,15 @@ pub const JointManager = struct {
         );
 
         // Initialize safety monitor
-        var joint_limits: [core.types.NUM_JOINTS]safety.types.JointLimit = undefined;
+        var joint_limits: [core.types.NUM_JOINTS]safety.JointLimits = undefined;
         for (0..core.types.NUM_JOINTS) |i| {
-            joint_limits[i] = .{
-                .min_angle = joint_mgr.configs[i].min_angle,
-                .max_angle = joint_mgr.configs[i].max_angle,
-                .max_velocity = joint_mgr.configs[i].max_velocity,
-                .max_acceleration = joint_mgr.configs[i].max_acceleration,
-            };
+            joint_limits[i] = safety.JointLimits.init(
+                joint_mgr.configs[i].min_angle,
+                joint_mgr.configs[i].max_angle,
+            );
         }
-        joint_mgr.safety = core.safety.SafetyMonitor.init(
-            joint_limits,
+        joint_mgr.safety = safety.SafetyMonitor.init(
+            &joint_limits,
             joint_mgr.collision_detector,
             0.1, // Emergency stop threshold
         );

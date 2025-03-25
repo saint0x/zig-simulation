@@ -83,7 +83,7 @@ pub const CommunicationInterface = struct {
             []const f32 => {
                 const bytes_per_float = 4;
                 for (data, 0..) |value, i| {
-                    const bytes = @bitCast([4]u8, value);
+                    const bytes = @as([4]u8, @bitCast(value));
                     @memcpy(packet[4 + i * bytes_per_float..][0..bytes_per_float], &bytes);
                 }
             },
@@ -107,7 +107,7 @@ pub const CommunicationInterface = struct {
     fn receivePacket(self: *Self) ![]u8 {
         // In real hardware, this would read from a physical interface
         // For simulation, we'll implement virtual reception
-        var packet = try self.allocator.alloc(u8, self.config.packet_size);
+        const packet = try self.allocator.alloc(u8, self.config.packet_size);
         // TODO: Implement virtual reception
         return packet;
     }

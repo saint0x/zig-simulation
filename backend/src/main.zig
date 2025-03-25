@@ -7,7 +7,10 @@ const core = @import("core");
 
 pub fn main() !void {
     // Initialize timing system for 1kHz control loop (1ms interval)
-    var timing = core.TimingSystem.init(1000000); // 1ms in nanoseconds
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+    var timing = try core.TimingSystem.init(allocator);
 
     // Initialize joint manager with default configurations
     var joint_manager = try core.JointManager.init(null, &timing);

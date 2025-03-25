@@ -15,29 +15,52 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    // Create the core module
-    const core = b.addModule("core", .{
-        .root_source_file = b.path("src/core/root.zig"),
+    // Create the utils module first since other modules depend on it
+    const utils = b.addModule("utils", .{
+        .root_source_file = b.path("src/utils/root.zig"),
     });
 
-    // Create the timing module
+    // Create the timing module first since core depends on it
     const timing = b.addModule("timing", .{
         .root_source_file = b.path("src/timing/root.zig"),
     });
-    timing.addImport("core", core);
+    timing.addImport("utils", utils);
 
-    // Create the kinematics module
+    // Create the kinematics module first since control depends on it
     const kinematics = b.addModule("kinematics", .{
         .root_source_file = b.path("src/kinematics/root.zig"),
     });
-    kinematics.addImport("core", core);
+    kinematics.addImport("utils", utils);
 
-    // Create the safety module
+    // Create the safety module first since control depends on it
     const safety = b.addModule("safety", .{
         .root_source_file = b.path("src/safety/root.zig"),
     });
-    safety.addImport("core", core);
+    safety.addImport("utils", utils);
     safety.addImport("kinematics", kinematics);
+
+    // Create the control module with all its dependencies
+    const control = b.addModule("control", .{
+        .root_source_file = b.path("src/control/root.zig"),
+    });
+    control.addImport("utils", utils);
+    control.addImport("kinematics", kinematics);
+    control.addImport("safety", safety);
+
+    // Create the core module with all its dependencies
+    const core = b.addModule("core", .{
+        .root_source_file = b.path("src/core/root.zig"),
+    });
+    core.addImport("utils", utils);
+    core.addImport("timing", timing);
+    core.addImport("control", control);
+    core.addImport("kinematics", kinematics);
+    core.addImport("safety", safety);
+
+    // Update other modules' dependencies to include core
+    control.addImport("core", core);
+    kinematics.addImport("core", core);
+    safety.addImport("core", core);
 
     // Create the HAL module
     const hal = b.addModule("hal", .{
@@ -46,23 +69,21 @@ pub fn build(b: *std.Build) void {
     hal.addImport("core", core);
     hal.addImport("safety", safety);
     hal.addImport("timing", timing);
+    hal.addImport("utils", utils);
 
-    // Create the control module
-    const control = b.addModule("control", .{
-        .root_source_file = b.path("src/control/root.zig"),
+    // Create the physics module
+    const physics = b.addModule("physics", .{
+        .root_source_file = b.path("src/physics/root.zig"),
     });
-    control.addImport("core", core);
-    control.addImport("kinematics", kinematics);
-    control.addImport("safety", safety);
-    control.addImport("timing", timing);
-    control.addImport("hal", hal);
+    physics.addImport("core", core);
+    physics.addImport("utils", utils);
 
-    // Add dependencies to core
-    core.addImport("timing", timing);
-    core.addImport("kinematics", kinematics);
-    core.addImport("safety", safety);
-    core.addImport("control", control);
-    core.addImport("hal", hal);
+    // Create the communication module
+    const communication = b.addModule("communication", .{
+        .root_source_file = b.path("src/communication/root.zig"),
+    });
+    communication.addImport("core", core);
+    communication.addImport("utils", utils);
 
     // Create the backend library
     const backend_lib = b.addStaticLibrary(.{
@@ -71,12 +92,18 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+
+    // Add all modules as dependencies
     backend_lib.root_module.addImport("core", core);
     backend_lib.root_module.addImport("kinematics", kinematics);
     backend_lib.root_module.addImport("safety", safety);
     backend_lib.root_module.addImport("timing", timing);
-    backend_lib.root_module.addImport("control", control);
     backend_lib.root_module.addImport("hal", hal);
+    backend_lib.root_module.addImport("control", control);
+    backend_lib.root_module.addImport("physics", physics);
+    backend_lib.root_module.addImport("communication", communication);
+    backend_lib.root_module.addImport("utils", utils);
+
     b.installArtifact(backend_lib);
 
     // Create the backend executable
@@ -86,13 +113,21 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+
+    // Link against the library
+    backend_exe.linkLibrary(backend_lib);
+
+    // Add all modules as dependencies to the executable
     backend_exe.root_module.addImport("core", core);
     backend_exe.root_module.addImport("kinematics", kinematics);
     backend_exe.root_module.addImport("safety", safety);
     backend_exe.root_module.addImport("timing", timing);
-    backend_exe.root_module.addImport("control", control);
     backend_exe.root_module.addImport("hal", hal);
-    backend_exe.linkLibrary(backend_lib);
+    backend_exe.root_module.addImport("control", control);
+    backend_exe.root_module.addImport("physics", physics);
+    backend_exe.root_module.addImport("communication", communication);
+    backend_exe.root_module.addImport("utils", utils);
+
     b.installArtifact(backend_exe);
 
     // Create a run step
