@@ -3,6 +3,7 @@ pub const types = @import("types.zig");
 pub const pid = @import("pid.zig");
 pub const joint_manager = @import("joint_manager.zig");
 pub const motion_planning = @import("motion_planning.zig");
+pub const safety = @import("safety.zig");
 
 // Re-export commonly used types for convenience
 pub const TimingConfig = timing.TimingConfig;
@@ -18,4 +19,5 @@ pub const PIDController = pid.PIDController;
 pub const JointManager = joint_manager.JointManager;
 pub const MotionPlanner = motion_planning.MotionPlanner;
 pub const MotionConfig = motion_planning.MotionConfig;
-pub const TrajectoryPoint = motion_planning.TrajectoryPoint; 
+pub const TrajectoryPoint = motion_planning.TrajectoryPoint;
+pub const SafetyMonitor = safety.SafetyMonitor; 
