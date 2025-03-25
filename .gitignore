@@ -18,11 +18,12 @@ out/
 
 # Dependencies
 node_modules/
-.npm/
+.pnpm-store/
 
 # Environment and config files
 .env
 .env.*
+!.env.example
 *.config.js
 *.config.json
 .editorconfig
@@ -79,4 +80,22 @@ next-env.d.ts
 
 # .pnp
 .pnp/
-.pnp.js 
+.pnp.js
+
+# Build outputs
+.next/
+out/
+build/
+dist/
+
+# Cache directories
+.cache/
+.temp/
+.tmp/
+
+# Frontend specific
+components.json
+next.config.mjs
+postcss.config.mjs
+tailwind.config.ts
+tsconfig.json 
