@@ -5,6 +5,7 @@ pub const joint_manager = @import("joint_manager.zig");
 pub const motion_planning = @import("motion_planning.zig");
 pub const safety = @import("safety.zig");
 pub const error_handler = @import("error.zig");
+pub const kinematics = @import("kinematics.zig");
 
 // Re-export commonly used types for convenience
 pub const TimingConfig = timing.TimingConfig;
@@ -24,4 +25,6 @@ pub const TrajectoryPoint = motion_planning.TrajectoryPoint;
 pub const SafetyMonitor = safety.SafetyMonitor;
 pub const ErrorHandler = error_handler.ErrorHandler;
 pub const Error = error_handler.Error;
-pub const ErrorContext = error_handler.ErrorContext; 
+pub const ErrorContext = error_handler.ErrorContext;
+pub const ForwardKinematics = kinematics.ForwardKinematics;
+pub const TransformMatrix = kinematics.TransformMatrix; 
