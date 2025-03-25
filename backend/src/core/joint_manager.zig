@@ -2,6 +2,7 @@ const std = @import("std");
 const types = @import("types.zig");
 const pid = @import("pid.zig");
 const timing = @import("timing.zig");
+const safety = @import("safety.zig");
 
 const JointConfig = types.JointConfig;
 const JointState = types.JointState;
@@ -10,6 +11,7 @@ const RobotState = types.RobotState;
 const NUM_JOINTS = types.NUM_JOINTS;
 const PIDController = pid.PIDController;
 const TimingSystem = timing.TimingSystem;
+const SafetyMonitor = safety.SafetyMonitor;
 
 /// Default joint configurations for the KUKA arm
 pub const default_joint_configs = [NUM_JOINTS]JointConfig{
@@ -132,6 +134,8 @@ pub const JointManager = struct {
     robot_state: RobotState,
     /// Timing system for control loop
     timing: *TimingSystem,
+    /// Safety monitor
+    safety: SafetyMonitor,
 
     const Self = @This();
 
@@ -163,6 +167,7 @@ pub const JointManager = struct {
             .controllers = controllers,
             .robot_state = .powered_off,
             .timing = timing_sys,
+            .safety = SafetyMonitor.init(final_configs),
         };
     }
 
@@ -171,6 +176,23 @@ pub const JointManager = struct {
         // Skip update if robot is not ready
         if (self.robot_state != .ready and self.robot_state != .moving) {
             return;
+        }
+
+        // Update safety monitor
+        const dt = 1.0 / @as(f32, @floatFromInt(self.timing.config.control_frequency));
+        self.safety.update(&self.states, dt);
+
+        // Check safety status
+        switch (self.safety.getStatus()) {
+            .fault => {
+                self.robot_state = .fault;
+                return;
+            },
+            .emergency_stop => {
+                self.robot_state = .emergency_stop;
+                return;
+            },
+            else => {},
         }
 
         // Update each joint
@@ -188,6 +210,12 @@ pub const JointManager = struct {
     pub fn setTargets(self: *Self, target_angles: [NUM_JOINTS]f32, target_velocities: [NUM_JOINTS]f32) void {
         // Check if robot is ready
         if (self.robot_state != .ready and self.robot_state != .moving) {
+            return;
+        }
+
+        // Check if target angles are within limits
+        if (!self.safety.checkJointAngles(&target_angles)) {
+            self.robot_state = .fault;
             return;
         }
 
@@ -216,6 +244,12 @@ pub const JointManager = struct {
 
     /// Update current joint states
     pub fn updateStates(self: *Self, current_angles: [NUM_JOINTS]f32, current_velocities: [NUM_JOINTS]f32) void {
+        // Check if current angles are within limits
+        if (!self.safety.checkJointAngles(&current_angles)) {
+            self.robot_state = .fault;
+            return;
+        }
+
         // Update each joint's state
         for (0..NUM_JOINTS) |i| {
             self.controllers[i].updateState(current_angles[i], current_velocities[i]);
@@ -228,6 +262,7 @@ pub const JointManager = struct {
             self.controllers[i].reset();
             self.states[i] = self.controllers[i].state;
         }
+        self.safety.reset();
         self.robot_state = .ready;
     }
 

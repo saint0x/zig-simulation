@@ -12,9 +12,9 @@
 
 ## Phase 2: Kinematics and Dynamics
 - [✅] Implement forward kinematics
-- [ ] Implement inverse kinematics
-- [ ] Add joint limit checking
-- [ ] Implement velocity and acceleration limits
+- [✅] Implement inverse kinematics
+- [✅] Add joint limit checking
+- [✅] Implement velocity and acceleration limits
 - [ ] Add collision detection
 
 ## Phase 3: Communication Layer
