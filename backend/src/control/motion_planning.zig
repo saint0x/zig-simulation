@@ -1,7 +1,8 @@
 const std = @import("std");
+const core = @import("core");
 const types = @import("types.zig");
-const timing = @import("timing.zig");
-const joint_manager = @import("joint_manager.zig");
+const timing = @import("timing");
+const joint_manager = @import("joint_manager/root.zig");
 
 const JointConfig = types.JointConfig;
 const JointState = types.JointState;

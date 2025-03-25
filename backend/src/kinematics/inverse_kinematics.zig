@@ -1,51 +1,60 @@
 const std = @import("std");
-const math = std.math;
-const Vec3 = @import("types.zig").Vec3;
-const JointAngles = @import("types.zig").JointAngles;
-const ForwardKinematics = @import("kinematics.zig").ForwardKinematics;
+const types = @import("core").types;
+const ForwardKinematics = @import("forward_kinematics.zig").ForwardKinematics;
 
 /// Inverse kinematics solver using numerical methods
 pub const InverseKinematics = struct {
     fk: ForwardKinematics,
-    max_iterations: u32 = 100,
-    tolerance: f32 = 0.001,
-    learning_rate: f32 = 0.1,
+    max_iterations: u32,
+    convergence_threshold: f32,
 
-    pub fn init() InverseKinematics {
+    pub fn init(
+        link_dimensions: [types.NUM_LINKS]types.LinkDimensions,
+        max_iterations: u32,
+        convergence_threshold: f32,
+    ) InverseKinematics {
         return .{
-            .fk = ForwardKinematics.init(),
+            .fk = ForwardKinematics.init(link_dimensions),
+            .max_iterations = max_iterations,
+            .convergence_threshold = convergence_threshold,
         };
     }
 
     /// Calculate joint angles to reach target position and orientation
-    pub fn solve(
+    pub fn computeJointAngles(
         self: *InverseKinematics,
-        target_pos: Vec3,
-        target_rot: Vec3,
-        initial_angles: ?JointAngles,
-    ) !JointAngles {
-        var current_angles = initial_angles orelse JointAngles.zero();
+        target_position: types.Vec3,
+        target_orientation: types.Orientation,
+    ) ![types.NUM_JOINTS]f32 {
+        // Initialize joint angles
+        var joint_angles = [_]f32{0} ** types.NUM_JOINTS;
         var iteration: u32 = 0;
 
         while (iteration < self.max_iterations) {
-            // Get current end-effector pose
-            var current_pos: Vec3 = undefined;
-            var current_rot: Vec3 = undefined;
-            self.fk.calcEndEffectorPose(current_angles, &current_pos, &current_rot);
+            // Update forward kinematics with current joint angles
+            self.fk.updateJointAngles(joint_angles);
 
-            // Calculate error
-            const pos_error = self.calculatePositionError(target_pos, current_pos);
-            const rot_error = self.calculateRotationError(target_rot, current_rot);
+            // Get current end-effector position and orientation
+            const current_pos = self.fk.computeLinkPosition(self.fk.link_dimensions[types.NUM_LINKS - 1]);
+            const current_orientation = computeCurrentOrientation();
 
-            // Check if we've reached the target
-            if (pos_error < self.tolerance and rot_error < self.tolerance) {
-                return current_angles;
+            // Compute position and orientation errors
+            const pos_error = computePositionError(target_position, current_pos);
+            const orient_error = computeOrientationError(target_orientation, current_orientation);
+
+            // Check convergence
+            if (pos_error < self.convergence_threshold and orient_error < self.convergence_threshold) {
+                return joint_angles;
             }
 
-            // Calculate Jacobian and update angles
-            const jacobian = self.calculateJacobian(current_angles);
-            const delta_angles = self.calculateDeltaAngles(jacobian, pos_error, rot_error);
-            current_angles = self.updateAngles(current_angles, delta_angles);
+            // Compute Jacobian matrix and updates (TODO: implement properly)
+            _ = computeJacobian();
+            const updates = computeJointUpdates();
+
+            // Update joint angles
+            for (0..types.NUM_JOINTS) |i| {
+                joint_angles[i] += updates[i];
+            }
 
             iteration += 1;
         }
@@ -53,90 +62,34 @@ pub const InverseKinematics = struct {
         return error.MaxIterationsReached;
     }
 
-    /// Calculate position error between target and current position
-    fn calculatePositionError(self: *InverseKinematics, target: Vec3, current: Vec3) f32 {
-        _ = self;
+    fn computeCurrentOrientation() types.Orientation {
+        // TODO: Implement orientation computation based on joint angles
+        return .{ .roll = 0, .pitch = 0, .yaw = 0 };
+    }
+
+    fn computePositionError(target: types.Vec3, current: types.Vec3) f32 {
         const dx = target.x - current.x;
         const dy = target.y - current.y;
         const dz = target.z - current.z;
         return @sqrt(dx * dx + dy * dy + dz * dz);
     }
 
-    /// Calculate rotation error between target and current orientation
-    fn calculateRotationError(self: *InverseKinematics, target: Vec3, current: Vec3) f32 {
-        _ = self;
-        const droll = target.x - current.x;
-        const dpitch = target.y - current.y;
-        const dyaw = target.z - current.z;
+    fn computeOrientationError(target: types.Orientation, current: types.Orientation) f32 {
+        const droll = target.roll - current.roll;
+        const dpitch = target.pitch - current.pitch;
+        const dyaw = target.yaw - current.yaw;
         return @sqrt(droll * droll + dpitch * dpitch + dyaw * dyaw);
     }
 
-    /// Calculate Jacobian matrix for current joint angles
-    fn calculateJacobian(self: *InverseKinematics, angles: JointAngles) [6][7]f32 {
-        var jacobian: [6][7]f32 = undefined;
-        const delta: f32 = 0.001; // Small angle change for numerical differentiation
-
-        // Calculate Jacobian using finite differences
-        for (0..7) |i| {
-            var angles_plus = angles;
-            angles_plus[i] += delta;
-            var pos_plus: Vec3 = undefined;
-            var rot_plus: Vec3 = undefined;
-            self.fk.calcEndEffectorPose(angles_plus, &pos_plus, &rot_plus);
-
-            var angles_minus = angles;
-            angles_minus[i] -= delta;
-            var pos_minus: Vec3 = undefined;
-            var rot_minus: Vec3 = undefined;
-            self.fk.calcEndEffectorPose(angles_minus, &pos_minus, &rot_minus);
-
-            // Position derivatives
-            jacobian[0][i] = (pos_plus.x - pos_minus.x) / (2 * delta);
-            jacobian[1][i] = (pos_plus.y - pos_minus.y) / (2 * delta);
-            jacobian[2][i] = (pos_plus.z - pos_minus.z) / (2 * delta);
-
-            // Rotation derivatives
-            jacobian[3][i] = (rot_plus.x - rot_minus.x) / (2 * delta);
-            jacobian[4][i] = (rot_plus.y - rot_minus.y) / (2 * delta);
-            jacobian[5][i] = (rot_plus.z - rot_minus.z) / (2 * delta);
-        }
-
+    fn computeJacobian() [6][types.NUM_JOINTS]f32 {
+        const jacobian: [6][types.NUM_JOINTS]f32 = undefined;
+        // TODO: Implement Jacobian computation
         return jacobian;
     }
 
-    /// Calculate delta angles using Jacobian
-    fn calculateDeltaAngles(
-        self: *InverseKinematics,
-        jacobian: [6][7]f32,
-        pos_error: f32,
-        rot_error: f32,
-    ) JointAngles {
-        // Weight position and rotation errors
-        const total_error = pos_error + 0.5 * rot_error;
-        
-        // Simple gradient descent
-        var delta_angles: JointAngles = undefined;
-        for (0..7) |i| {
-            var sum: f32 = 0;
-            for (0..6) |j| {
-                sum += jacobian[j][i] * self.learning_rate * total_error;
-            }
-            delta_angles[i] = sum;
-        }
-        return delta_angles;
-    }
-
-    /// Update joint angles with delta angles
-    fn updateAngles(
-        self: *InverseKinematics,
-        current: JointAngles,
-        delta: JointAngles,
-    ) JointAngles {
-        _ = self;
-        var new_angles = current;
-        for (0..7) |i| {
-            new_angles[i] += delta[i];
-        }
-        return new_angles;
+    fn computeJointUpdates() [types.NUM_JOINTS]f32 {
+        const updates: [types.NUM_JOINTS]f32 = undefined;
+        // TODO: Implement joint updates computation using pseudo-inverse
+        return updates;
     }
 }; 

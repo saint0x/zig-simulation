@@ -6,14 +6,12 @@ const std = @import("std");
 const core = @import("core");
 
 pub fn main() !void {
-    // Initialize timing system for 1kHz control loop
-    var timing = core.TimingSystem.init(.{
-        .control_frequency = 1000,
-        .max_jitter = 100,
-    });
+    // Initialize timing system for 1kHz control loop (1ms interval)
+    var timing = core.TimingSystem.init(1000000); // 1ms in nanoseconds
 
     // Initialize joint manager with default configurations
-    var joint_manager = core.JointManager.init(null, &timing);
+    var joint_manager = try core.JointManager.init(null, &timing);
+    defer joint_manager.deinit();
 
     // Power up the robot
     joint_manager.reset();
@@ -21,10 +19,11 @@ pub fn main() !void {
     // Main control loop
     while (true) {
         // Wait for next control cycle
-        _ = timing.waitForNextTick();
+        const current_time: i64 = @intCast(std.time.nanoTimestamp());
+        if (!timing.shouldUpdate(current_time)) continue;
 
         // Update joint controllers
-        joint_manager.update();
+        try joint_manager.update();
 
         // TODO: Add communication with frontend
         // 1. Receive target positions
