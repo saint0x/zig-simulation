@@ -89,10 +89,9 @@ const UpdateThread = struct {
             const state = self.joint_manager.getJointState(@enumFromInt(i));
             positions[i] = state.current_angle;
             velocities[i] = state.current_velocity;
-            // TODO: Add real sensor data when hardware interface is ready
-            torques[i] = 0;
-            temperatures[i] = 25.0; // Room temperature for now
-            currents[i] = 0;
+            torques[i] = state.current_torque;
+            temperatures[i] = state.temperature;
+            currents[i] = state.current;
         }
 
         const state = protocol.JointStateMessage{
@@ -251,108 +250,105 @@ const UpdateThread = struct {
 };
 
 const WebSocketServer = struct {
-    server: std.net.Server,
     allocator: std.mem.Allocator,
-    port: u16,
+    server: std.net.StreamServer,
     clients: std.ArrayList(*Client),
-    running: bool,
     update_thread: *UpdateThread,
-    joint_manager: *joints.JointManager,
+    running: bool,
+    thread: Thread,
 
-    const Self = @This();
-
-    pub fn init(allocator: std.mem.Allocator, port: u16, joint_manager: *joints.JointManager) !*Self {
-        const server = try std.net.Server.init(.{
-            .address = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, port),
-            .reuse_address = true,
-        });
-
-        var clients = std.ArrayList(*Client).init(allocator);
-        const update_thread = try UpdateThread.init(allocator, &clients, joint_manager);
-
-        const self = try allocator.create(Self);
+    pub fn init(allocator: std.mem.Allocator, port: u16, joint_manager: *joints.JointManager) !*WebSocketServer {
+        const self = try allocator.create(WebSocketServer);
         self.* = .{
-            .server = server,
             .allocator = allocator,
-            .port = port,
-            .clients = clients,
+            .server = std.net.StreamServer.init(.{ .reuse_address = true }),
+            .clients = std.ArrayList(*Client).init(allocator),
+            .update_thread = try UpdateThread.init(allocator, &self.clients, joint_manager),
             .running = false,
-            .update_thread = update_thread,
-            .joint_manager = joint_manager,
+            .thread = undefined,
         };
+
+        try self.server.listen(std.net.Address.parseIp4("127.0.0.1", port) catch return error.InvalidAddress);
         return self;
     }
 
-    pub fn deinit(self: *Self) void {
+    pub fn start(self: *WebSocketServer) !void {
+        self.running = true;
+        try self.update_thread.start();
+        self.thread = try Thread.spawn(.{}, acceptLoop, .{self});
+    }
+
+    pub fn stop(self: *WebSocketServer) void {
         self.running = false;
+        self.server.close();
+        self.thread.join();
         self.update_thread.stop();
+        
         for (self.clients.items) |client| {
             client.deinit();
             self.allocator.destroy(client);
         }
         self.clients.deinit();
-        self.server.deinit();
         self.allocator.destroy(self);
     }
 
-    fn generateAcceptKey(key: []const u8) ![28]u8 {
-        const magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-        var hasher = crypto.hash.Sha1.init(.{});
-        hasher.update(key);
-        hasher.update(magic);
-        var result: [20]u8 = undefined;
-        hasher.final(&result);
-        return std.base64.standard.Encoder.encode(result[0..]);
+    fn acceptLoop(self: *WebSocketServer) !void {
+        while (self.running) {
+            const connection = self.server.accept() catch |err| {
+                if (err == error.ConnectionAborted) break;
+                std.log.err("Failed to accept connection: {}", .{err});
+                continue;
+            };
+
+            const client = Client.init(self.allocator, connection) catch |err| {
+                std.log.err("Failed to initialize client: {}", .{err});
+                connection.stream.close();
+                continue;
+            };
+
+            if (client.performHandshake()) |_| {
+                self.clients.append(client) catch |err| {
+                    std.log.err("Failed to add client: {}", .{err});
+                    client.deinit();
+                    self.allocator.destroy(client);
+                    continue;
+                };
+                try Thread.spawn(.{}, handleClient, .{ self, client });
+            } else |err| {
+                std.log.err("WebSocket handshake failed: {}", .{err});
+                client.deinit();
+                self.allocator.destroy(client);
+            }
+        }
     }
 
-    pub fn start(self: *Self) !void {
-        std.log.info("WebSocket server starting on port {d}...", .{self.port});
-        self.running = true;
-        try self.update_thread.start();
-
-        while (self.running) {
-            const connection = try self.server.accept();
-            
-            // Handle HTTP upgrade to WebSocket
-            var buf: [1024]u8 = undefined;
-            const n = try connection.stream.read(&buf);
-            
-            // Parse headers to get Sec-WebSocket-Key
-            var lines = std.mem.split(u8, buf[0..n], "\r\n");
-            var key: ?[]const u8 = null;
-            while (lines.next()) |line| {
-                if (std.mem.startsWith(u8, line, "Sec-WebSocket-Key: ")) {
-                    key = line["Sec-WebSocket-Key: ".len..];
+    fn handleClient(self: *WebSocketServer, client: *Client) !void {
+        defer {
+            for (self.clients.items, 0..) |c, i| {
+                if (c == client) {
+                    _ = self.clients.orderedRemove(i);
                     break;
                 }
             }
+            client.deinit();
+            self.allocator.destroy(client);
+        }
 
-            if (key) |ws_key| {
-                const accept_key = try generateAcceptKey(ws_key);
-                
-                // Very permissive CORS headers
-                var response_buf: [512]u8 = undefined;
-                const response = try std.fmt.bufPrint(&response_buf,
-                    "HTTP/1.1 101 Switching Protocols\r\n" ++
-                    "Upgrade: websocket\r\n" ++
-                    "Connection: Upgrade\r\n" ++
-                    "Access-Control-Allow-Origin: *\r\n" ++
-                    "Access-Control-Allow-Methods: *\r\n" ++
-                    "Access-Control-Allow-Headers: *\r\n" ++
-                    "Sec-WebSocket-Accept: {s}\r\n" ++
-                    "\r\n", .{accept_key});
+        var frame_buffer: [4096]u8 = undefined;
+        while (true) {
+            const frame = client.readFrame(&frame_buffer) catch |err| {
+                if (err != error.EndOfStream) {
+                    std.log.err("Error reading frame: {}", .{err});
+                }
+                break;
+            };
 
-                _ = try connection.stream.write(response);
-
-                // Create and store client
-                const client = try Client.init(self.allocator, connection);
-                try self.clients.append(client);
-
-                // Spawn client handler thread
-                _ = try std.Thread.spawn(.{}, Client.handle, .{client});
-            } else {
-                // Invalid WebSocket request
-                connection.stream.close();
+            if (frame.type == protocol.MESSAGE_TYPE_COMMAND) {
+                const cmd = std.json.parse(protocol.CommandMessage, self.allocator, frame.payload, .{}) catch |err| {
+                    std.log.err("Failed to parse command: {}", .{err});
+                    continue;
+                };
+                try self.update_thread.command_queue.append(cmd);
             }
         }
     }
@@ -360,78 +356,146 @@ const WebSocketServer = struct {
 
 const Client = struct {
     allocator: std.mem.Allocator,
-    connection: std.net.Server.Connection,
-    running: bool,
-    write_buffer: [4096]u8,
-    read_buffer: [4096]u8,
+    connection: std.net.StreamServer.Connection,
+    write_buffer: [8192]u8,
+    read_buffer: [8192]u8,
 
-    const Self = @This();
-
-    pub fn init(allocator: std.mem.Allocator, connection: std.net.Server.Connection) !*Self {
-        const self = try allocator.create(Self);
+    pub fn init(allocator: std.mem.Allocator, connection: std.net.StreamServer.Connection) !*Client {
+        const self = try allocator.create(Client);
         self.* = .{
             .allocator = allocator,
             .connection = connection,
-            .running = true,
             .write_buffer = undefined,
             .read_buffer = undefined,
         };
         return self;
     }
 
-    pub fn deinit(self: *Self) void {
-        self.running = false;
+    pub fn deinit(self: *Client) void {
         self.connection.stream.close();
     }
 
-    pub fn handle(self: *Self) !void {
-        while (self.running) {
-            if (self.connection.stream.read(&self.read_buffer)) |n| {
-                if (n == 0) break; // Connection closed
-                
-                var stream = std.io.fixedBufferStream(self.read_buffer[0..n]);
-                const frame = try protocol.Frame.decode(stream.reader(), self.allocator);
-                defer self.allocator.free(frame.payload);
+    pub fn performHandshake(self: *Client) !void {
+        var buffer: [1024]u8 = undefined;
+        const bytes_read = try self.connection.stream.read(&buffer);
+        const request = buffer[0..bytes_read];
 
-                switch (frame.type) {
-                    protocol.MESSAGE_TYPE_COMMAND => {
-                        if (std.json.parse(protocol.CommandMessage, self.allocator, frame.payload, .{})) |cmd| {
-                            // TODO: Add to command queue
-                            self.allocator.free(cmd);
-                        } else |err| {
-                            std.log.err("Failed to parse command: {}", .{err});
-                        }
-                    },
-                    else => {}, // Ignore other message types from client
-                }
-            } else |err| {
-                std.log.err("Error reading from client: {}", .{err});
-                break;
+        // Parse HTTP request and verify it's a WebSocket upgrade request
+        if (!std.mem.startsWith(u8, request, "GET")) return error.InvalidRequest;
+        if (!std.mem.containsAtLeast(u8, request, 1, "Upgrade: websocket")) return error.NotWebSocket;
+
+        // Extract the Sec-WebSocket-Key header
+        var key_start = std.mem.indexOf(u8, request, "Sec-WebSocket-Key: ") orelse return error.NoKey;
+        key_start += "Sec-WebSocket-Key: ".len;
+        const key_end = std.mem.indexOfPos(u8, request, key_start, "\r\n") orelse return error.InvalidKey;
+        const client_key = request[key_start..key_end];
+
+        // Generate the accept key
+        const magic_string = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+        var hasher = crypto.hash.Sha1.init(.{});
+        hasher.update(client_key);
+        hasher.update(magic_string);
+        var accept_key: [20]u8 = undefined;
+        hasher.final(&accept_key);
+
+        // Encode the accept key in base64
+        var accept_key_base64: [28]u8 = undefined;
+        _ = std.base64.standard.Encoder.encode(&accept_key_base64, &accept_key);
+
+        // Send the WebSocket handshake response
+        const response = try std.fmt.allocPrint(self.allocator,
+            \\HTTP/1.1 101 Switching Protocols\r\n
+            \\Upgrade: websocket\r\n
+            \\Connection: Upgrade\r\n
+            \\Sec-WebSocket-Accept: {s}\r\n
+            \\\r\n
+        , .{accept_key_base64});
+        defer self.allocator.free(response);
+
+        _ = try self.connection.stream.write(response);
+    }
+
+    pub fn readFrame(self: *Client, buffer: []u8) !protocol.Frame {
+        // Read frame header
+        var header: [2]u8 = undefined;
+        _ = try self.connection.stream.read(&header);
+
+        const opcode = header[0] & 0x0F;
+        const masked = (header[1] & 0x80) != 0;
+        const payload_len = header[1] & 0x7F;
+
+        // Read extended payload length if needed
+        var extended_len: u64 = 0;
+        if (payload_len == 126) {
+            var len_bytes: [2]u8 = undefined;
+            _ = try self.connection.stream.read(&len_bytes);
+            extended_len = @as(u64, len_bytes[0]) << 8 | len_bytes[1];
+        } else if (payload_len == 127) {
+            var len_bytes: [8]u8 = undefined;
+            _ = try self.connection.stream.read(&len_bytes);
+            extended_len = @as(u64, len_bytes[0]) << 56 |
+                          @as(u64, len_bytes[1]) << 48 |
+                          @as(u64, len_bytes[2]) << 40 |
+                          @as(u64, len_bytes[3]) << 32 |
+                          @as(u64, len_bytes[4]) << 24 |
+                          @as(u64, len_bytes[5]) << 16 |
+                          @as(u64, len_bytes[6]) << 8 |
+                          len_bytes[7];
+        }
+
+        const final_len = if (payload_len < 126) payload_len else extended_len;
+
+        // Read masking key if frame is masked
+        var mask: [4]u8 = undefined;
+        if (masked) {
+            _ = try self.connection.stream.read(&mask);
+        }
+
+        // Read payload
+        const payload = buffer[0..final_len];
+        _ = try self.connection.stream.read(payload);
+
+        // Unmask payload if needed
+        if (masked) {
+            for (payload, 0..) |*byte, i| {
+                byte.* ^= mask[i % 4];
             }
         }
+
+        return protocol.Frame{
+            .type = opcode,
+            .payload = payload,
+        };
     }
 };
 
 pub const Communication = struct {
-    ws_server: *WebSocketServer,
     allocator: std.mem.Allocator,
-    joint_manager: *joints.JointManager,
+    server: *WebSocketServer,
+    port: u16,
 
-    pub fn init(allocator: std.mem.Allocator, joint_manager: *joints.JointManager) !Communication {
-        const ws_server = try WebSocketServer.init(allocator, 8080, joint_manager);
+    pub fn init(allocator: std.mem.Allocator) !Communication {
         return Communication{
-            .ws_server = ws_server,
             .allocator = allocator,
-            .joint_manager = joint_manager,
+            .server = undefined,
+            .port = 8080,
         };
     }
 
-    pub fn deinit(self: *Communication) void {
-        self.ws_server.deinit();
+    pub fn start(self: *Communication, joint_manager: *joints.JointManager) !void {
+        self.server = try WebSocketServer.init(self.allocator, self.port, joint_manager);
+        try self.server.start();
+        std.log.info("WebSocket server started on port {d}", .{self.port});
     }
 
-    pub fn start(self: *Communication) !void {
-        try self.ws_server.start();
+    pub fn stop(self: *Communication) void {
+        if (self.server != undefined) {
+            self.server.stop();
+        }
+    }
+
+    pub fn deinit(self: *Communication) void {
+        self.stop();
     }
 };
 

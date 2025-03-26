@@ -41,6 +41,9 @@ pub const JointManager = struct {
                 .current_velocity = 0,
                 .target_angle = 0,
                 .target_velocity = 0,
+                .current_torque = 0,
+                .temperature = 25.0,  // Room temperature
+                .current = 0,
                 .integral_term = 0,
                 .last_error = 0,
             };
@@ -71,6 +74,9 @@ pub const JointManager = struct {
                 .current_velocity = 0,
                 .target_angle = 0,
                 .target_velocity = 0,
+                .current_torque = 0,
+                .temperature = 25.0,  // Room temperature
+                .current = 0,
                 .integral_term = 0,
                 .last_error = 0,
             };
@@ -123,6 +129,9 @@ pub const JointManager = struct {
                 .current_velocity = 0,
                 .target_angle = 0,
                 .target_velocity = 0,
+                .current_torque = 0,
+                .temperature = 25.0,  // Room temperature
+                .current = 0,
                 .integral_term = 0,
                 .last_error = 0,
             };

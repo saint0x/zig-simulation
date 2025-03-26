@@ -117,9 +117,15 @@ pub const CommunicationInterface = struct {
         _ = packet;
         // TODO: Implement packet parsing
         return types.JointState{
-            .position = [_]f32{0} ** types.NUM_JOINTS,
-            .velocity = [_]f32{0} ** types.NUM_JOINTS,
-            .torque = [_]f32{0} ** types.NUM_JOINTS,
+            .current_angle = 0.0,
+            .current_velocity = 0.0,
+            .target_angle = 0.0,
+            .target_velocity = 0.0,
+            .current_torque = 0.0,
+            .temperature = 0.0,
+            .current = 0.0,
+            .integral_term = 0.0,
+            .last_error = 0.0,
         };
     }
 }; 

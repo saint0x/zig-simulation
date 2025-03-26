@@ -89,15 +89,21 @@ pub const HardwareInterface = struct {
 
     pub fn getJointStates(self: *Self) !types.JointState {
         var state = types.JointState{
-            .position = [_]f32{0} ** types.NUM_JOINTS,
-            .velocity = [_]f32{0} ** types.NUM_JOINTS,
-            .torque = [_]f32{0} ** types.NUM_JOINTS,
+            .current_angle = 0,
+            .current_velocity = 0,
+            .target_angle = 0,
+            .target_velocity = 0,
+            .current_torque = 0,
+            .temperature = 0,
+            .current = 0,
+            .integral_term = 0,
+            .last_error = 0,
         };
 
-        for (self.motors, 0..) |m, i| {
-            state.position[i] = m.getCurrentPosition();
-            state.velocity[i] = m.getCurrentVelocity();
-            state.torque[i] = m.getCurrentTorque();
+        for (self.motors) |m| {
+            state.current_angle = m.getCurrentPosition();
+            state.current_velocity = m.getCurrentVelocity();
+            state.current_torque = m.getCurrentTorque();
         }
 
         return state;

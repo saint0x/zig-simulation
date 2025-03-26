@@ -47,6 +47,12 @@ pub const JointState = struct {
     target_angle: f32,
     /// Target joint velocity in degrees/second
     target_velocity: f32,
+    /// Current joint torque in Nm
+    current_torque: f32,
+    /// Motor temperature in degrees Celsius
+    temperature: f32,
+    /// Motor current in Amperes
+    current: f32,
     /// Integral term for PID control
     integral_term: f32,
     /// Last error for derivative term
