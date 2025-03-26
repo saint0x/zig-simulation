@@ -6,6 +6,7 @@ pub const MESSAGE_TYPE_JOINT_STATE = 0;    // Binary format
 pub const MESSAGE_TYPE_SYSTEM_STATUS = 1;  // JSON
 pub const MESSAGE_TYPE_COLLISION_DATA = 2; // JSON
 pub const MESSAGE_TYPE_COMMAND = 3;        // JSON from frontend
+pub const MESSAGE_TYPE_CONNECTION_STATUS = 4; // JSON
 
 // System states
 pub const SYSTEM_STATE_READY = 0;
@@ -30,6 +31,11 @@ pub const SAFETY_CMD_ENABLE = 0;
 pub const SAFETY_CMD_DISABLE = 1;
 pub const SAFETY_CMD_RESET = 2;
 pub const SAFETY_CMD_E_STOP = 3;
+
+// Connection status constants
+pub const CONNECTION_STATUS_CONNECTED = 0;
+pub const CONNECTION_STATUS_DISCONNECTED = 1;
+pub const CONNECTION_STATUS_ERROR = 2;
 
 // Binary format for high-frequency joint states
 pub const JointStateMessage = packed struct {
@@ -77,6 +83,32 @@ pub const CommandMessage = struct {
         type: u8,  // Uses SAFETY_CMD_* constants
         zone_id: ?[]const u8 = null,
     } = null,
+};
+
+pub const ConnectionStatusMessage = struct {
+    status: u8,  // Uses CONNECTION_STATUS_* constants
+    message: ?[]const u8,
+    timestamp_us: u64,
+
+    pub fn jsonStringify(self: ConnectionStatusMessage, options: std.json.StringifyOptions, writer: anytype) !void {
+        try writer.writeAll("{\"status\":");
+        const status_str = switch (self.status) {
+            CONNECTION_STATUS_CONNECTED => "connected",
+            CONNECTION_STATUS_DISCONNECTED => "disconnected",
+            CONNECTION_STATUS_ERROR => "error",
+            else => "unknown",
+        };
+        try std.json.stringify(status_str, options, writer);
+        try writer.writeAll(",\"message\":");
+        if (self.message) |msg| {
+            try std.json.stringify(msg, options, writer);
+        } else {
+            try writer.writeAll("null");
+        }
+        try writer.writeAll(",\"timestamp_us\":");
+        try std.json.stringify(self.timestamp_us, options, writer);
+        try writer.writeAll("}");
+    }
 };
 
 // WebSocket frame handling

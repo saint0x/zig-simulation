@@ -256,6 +256,7 @@ const WebSocketServer = struct {
     update_thread: *UpdateThread,
     running: bool,
     thread: Thread,
+    mutex: Thread.Mutex,
 
     pub fn init(allocator: std.mem.Allocator, port: u16, joint_manager: *joints.JointManager) !*WebSocketServer {
         const self = try allocator.create(WebSocketServer);
@@ -266,6 +267,7 @@ const WebSocketServer = struct {
             .update_thread = try UpdateThread.init(allocator, &self.clients, joint_manager),
             .running = false,
             .thread = undefined,
+            .mutex = Thread.Mutex{},
         };
 
         try self.server.listen(std.net.Address.parseIp4("127.0.0.1", port) catch return error.InvalidAddress);
@@ -323,7 +325,32 @@ const WebSocketServer = struct {
     }
 
     fn handleClient(self: *WebSocketServer, client: *Client) !void {
+        // Send connection status to all clients
+        const status = protocol.ConnectionStatusMessage{
+            .status = protocol.CONNECTION_STATUS_CONNECTED,
+            .message = "New client connected",
+            .timestamp_us = @as(u64, time.microTimestamp()),
+        };
+        const json_string = try std.json.stringifyAlloc(self.allocator, status, .{});
+        defer self.allocator.free(json_string);
+
+        const connect_frame = protocol.Frame{
+            .type = protocol.MESSAGE_TYPE_CONNECTION_STATUS,
+            .payload = json_string,
+        };
+
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        for (self.clients.items) |c| {
+            var stream = std.io.fixedBufferStream(&c.write_buffer);
+            try connect_frame.encode(stream.writer());
+            _ = try c.connection.stream.write(c.write_buffer[0..stream.pos]);
+        }
+
+        // Ensure cleanup happens when function exits
         defer {
+            // Remove client from list
             for (self.clients.items, 0..) |c, i| {
                 if (c == client) {
                     _ = self.clients.orderedRemove(i);
@@ -332,6 +359,27 @@ const WebSocketServer = struct {
             }
             client.deinit();
             self.allocator.destroy(client);
+
+            // Try to send disconnection status
+            if (std.json.stringifyAlloc(self.allocator, protocol.ConnectionStatusMessage{
+                .status = protocol.CONNECTION_STATUS_DISCONNECTED,
+                .message = "Client disconnected",
+                .timestamp_us = @as(u64, time.microTimestamp()),
+            }, .{})) |disconnect_json| {
+                defer self.allocator.free(disconnect_json);
+
+                const disconnect_frame = protocol.Frame{
+                    .type = protocol.MESSAGE_TYPE_CONNECTION_STATUS,
+                    .payload = disconnect_json,
+                };
+
+                for (self.clients.items) |c| {
+                    var stream = std.io.fixedBufferStream(&c.write_buffer);
+                    if (disconnect_frame.encode(stream.writer())) |_| {
+                        _ = c.connection.stream.write(c.write_buffer[0..stream.pos]) catch {};
+                    } else |_| {}
+                }
+            } else |_| {}
         }
 
         var frame_buffer: [4096]u8 = undefined;
