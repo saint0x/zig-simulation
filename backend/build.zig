@@ -53,9 +53,20 @@ pub fn build(b: *std.Build) void {
     });
     core.addImport("utils", utils);
     core.addImport("timing", timing);
-    core.addImport("control", control);
-    core.addImport("kinematics", kinematics);
     core.addImport("safety", safety);
+    core.addImport("kinematics", kinematics);
+    core.addImport("control", control);
+
+    // Create the joints module
+    const joints = b.addModule("joints", .{
+        .root_source_file = b.path("src/joints/root.zig"),
+    });
+    joints.addImport("utils", utils);
+    joints.addImport("timing", timing);
+    joints.addImport("safety", safety);
+    joints.addImport("kinematics", kinematics);
+    joints.addImport("control", control);
+    joints.addImport("core", core);
 
     // Update other modules' dependencies to include core
     control.addImport("core", core);
@@ -103,6 +114,7 @@ pub fn build(b: *std.Build) void {
     backend_lib.root_module.addImport("physics", physics);
     backend_lib.root_module.addImport("communication", communication);
     backend_lib.root_module.addImport("utils", utils);
+    backend_lib.root_module.addImport("joints", joints);
 
     b.installArtifact(backend_lib);
 
@@ -127,6 +139,7 @@ pub fn build(b: *std.Build) void {
     backend_exe.root_module.addImport("physics", physics);
     backend_exe.root_module.addImport("communication", communication);
     backend_exe.root_module.addImport("utils", utils);
+    backend_exe.root_module.addImport("joints", joints);
 
     b.installArtifact(backend_exe);
 

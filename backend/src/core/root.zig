@@ -13,7 +13,6 @@ pub const timing = @import("timing");
 // Control system
 pub const control = @import("control");
 pub const pid = control.pid;
-pub const joint_manager = control.joint_manager;
 pub const motion_planning = control.motion_planning;
 
 // Kinematics
@@ -48,7 +47,6 @@ pub const CollisionConfig = types.CollisionConfig;
 
 // Re-export commonly used types for convenience
 pub const PIDController = control.PIDController;
-pub const JointManager = control.JointManager;
 pub const MotionPlanner = control.MotionPlanner;
 pub const MotionConfig = control.MotionConfig;
 pub const PIDConfig = control.PIDConfig;
