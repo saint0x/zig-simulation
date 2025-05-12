@@ -29,7 +29,7 @@ The `zig-controller.tsx` component will be refactored to become the live communi
     *   Establish and maintain a persistent WebSocket connection to the Zig backend.
     *   Manage connection states (connecting, connected, disconnected, error).
     *   Implement reconnection logic.
-    *   Backend WebSocket server endpoint is **`ws://localhost:9001`** (confirmed from `backend/src/communication/main.zig`).
+    *   Backend WebSocket server endpoint is **`ws://localhost:9001`** ([x] Confirmed and backend default updated).
 
 2.  **Binary Protocol Handling:**
     *   **Overall Structure:** Communication uses a custom framing protocol (see `backend/src/communication/protocol.zig` - `Frame` struct):
@@ -63,12 +63,12 @@ The `zig-controller.tsx` component will be refactored to become the live communi
 
 ## 5. Data Mapping Summary
 
-Refer to `FE.md` (Section: "Backend-Frontend Interface"), `backend/src/communication/main.zig`, and `backend/src/communication/protocol.zig` for detailed interface definitions. The backend sends a Frame (`type: u8`, `payload_len: u32`, `payload: []u8`).
+Refer to `FE.md` (Section: "Backend-Frontend Interface"), `backend/src/communication/main.zig`, and `backend/src/communication/protocol.zig` for detailed interface definitions. The backend sends a Frame (`type: u8`, `payload_len: u32`, `payload: []u8`). [x] Backend implementation verified and cleaned.
 
 ### 5.1. Backend to Frontend (Payload Format within Frame):
-| Backend `message_type` (protocol.zig) | Message Name         | Payload Format | Frontend Interface (FE.md) | Frequency (approx) |
-| :------------------------------------ | :------------------- | :------------- | :------------------------- | :----------------- |
-| `MESSAGE_TYPE_JOINT_STATE (0)`        | `JointStateMessage`  | **Binary**     | `JointState`               | 1kHz               |
+| Backend `message_type` (protocol.zig) | Message Name         | Payload Format | Frontend Interface (FE.md) | Frequency (approx) | Notes |
+| :------------------------------------ | :------------------- | :------------- | :------------------------- | :----------------- | :---- |
+| `MESSAGE_TYPE_JOINT_STATE (0)`        | `JointStateMessage`  | **Binary**     | `JointState`               | 1kHz               | [x] Uses NUM_JOINTS (7) |
 | `MESSAGE_TYPE_SYSTEM_STATUS (1)`      | `SystemStatusMessage`| **JSON**       | `SystemStatus`             | 100Hz              |
 | `MESSAGE_TYPE_COLLISION_DATA (2)`     | `CollisionMessage`   | **JSON**       | `CollisionData`            | 100Hz (on change)  |
 | `MESSAGE_TYPE_CONNECTION_STATUS (4)`  | `ConnectionStatusMessage` | **JSON**   | (New - define in FE)     | On event           |
