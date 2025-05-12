@@ -57,11 +57,11 @@ pub const GripperState = enum(u8) {
 // Binary format for high-frequency joint states
 pub const JointStateMessage = extern struct {
     timestamp_us: u64,
-    positions: [6]f32,
-    velocities: [6]f32,
-    torques: [6]f32,
-    temperatures: [6]f32,
-    currents: [6]f32,
+    positions: [core.types.NUM_JOINTS]f32,
+    velocities: [core.types.NUM_JOINTS]f32,
+    torques: [core.types.NUM_JOINTS]f32,
+    temperatures: [core.types.NUM_JOINTS]f32,
+    currents: [core.types.NUM_JOINTS]f32,
 };
 
 pub const SafetyStatus = struct {

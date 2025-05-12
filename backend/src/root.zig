@@ -14,6 +14,29 @@ pub const physics = @import("physics");
 pub const communication = @import("communication");
 pub const utils = @import("utils");
 
+pub const Error = error{
+    OutOfMemory,
+    ConnectionRefused,
+    InvalidOperation,
+    SafetyLimitExceeded,
+    CollisionDetected,
+    ConfigurationError,
+    CommunicationError,
+    Timeout,
+    InitializationFailed,
+    InternalError,
+    // Added specific communication/command errors
+    InvalidControlMode,
+    InvalidCommandPayload,
+    InvalidSafetyCommand,
+    InvalidNumberOfTorques,
+    MissingControlModeValue, // Added this one too
+};
+
+pub const Result = union(enum) {
+    // ... existing code ...
+};
+
 pub export fn add(a: i32, b: i32) i32 {
     return a + b;
 }

@@ -81,13 +81,13 @@ const UpdateThread = struct {
 
     fn sendJointStates(self: *UpdateThread) !void {
         // Get current joint states
-        var positions: [6]f32 = undefined;
-        var velocities: [6]f32 = undefined;
-        var torques: [6]f32 = undefined;
-        var temperatures: [6]f32 = undefined;
-        var currents: [6]f32 = undefined;
+        var positions: [core.types.NUM_JOINTS]f32 = undefined;
+        var velocities: [core.types.NUM_JOINTS]f32 = undefined;
+        var torques: [core.types.NUM_JOINTS]f32 = undefined;
+        var temperatures: [core.types.NUM_JOINTS]f32 = undefined;
+        var currents: [core.types.NUM_JOINTS]f32 = undefined;
 
-        for (0..6) |i| {
+        for (0..core.types.NUM_JOINTS) |i| {
             const state = self.joint_manager.getJointState(@enumFromInt(i));
             positions[i] = state.current_angle;
             velocities[i] = state.current_velocity;
@@ -144,7 +144,11 @@ const UpdateThread = struct {
             },
             .error_code = if (robot_state == .fault) "FAULT" else null,
             .safety_status = safety_status_placeholder, // Use placeholder
-            .control_mode = protocol.CONTROL_MODE_POSITION, // TODO: Get from joint manager
+            .control_mode = switch (self.joint_manager.control_mode) { // Use actual control mode
+                .position => protocol.CONTROL_MODE_POSITION,
+                .velocity => protocol.CONTROL_MODE_VELOCITY,
+                .torque => protocol.CONTROL_MODE_TORQUE,
+            },
         };
 
         const json_string = try std.json.stringifyAlloc(self.allocator, status, .{});
@@ -174,56 +178,69 @@ const UpdateThread = struct {
             switch (cmd.type) {
                 protocol.COMMAND_TYPE_POSITION => {
                     if (cmd.values) |positions| {
-                        var velocities: [6]f32 = [_]f32{0} ** 6; // Default velocities
+                        // Check length
+                        if (positions.len != core.types.NUM_JOINTS) {
+                            std.log.err("Position command length mismatch: expected {}, got {}", .{core.types.NUM_JOINTS, positions.len});
+                            return error.InvalidCommandPayload;
+                        }
+                        var velocities: [core.types.NUM_JOINTS]f32 = [_]f32{0} ** core.types.NUM_JOINTS; // Use NUM_JOINTS
                         if (cmd.max_velocity) |max_vels| {
-                            // Ensure lengths match before copying
-                            if (max_vels.len >= 6) {
-                                @memcpy(&velocities, max_vels[0..6]); 
+                            // Optional: Add stricter checking for max_vels length too
+                            if (max_vels.len >= core.types.NUM_JOINTS) {
+                                @memcpy(&velocities, max_vels[0..core.types.NUM_JOINTS]); 
                             }
                         }
-                        // TODO: Handle potential length mismatch between positions/velocities and NUM_JOINTS
-                        const num_joints_to_set = @min(positions.len, core.types.NUM_JOINTS);
-                        for (0..num_joints_to_set) |i| {
+                        // Length is now guaranteed to match
+                        for (0..core.types.NUM_JOINTS) |i| {
                            self.joint_manager.joints[i].target_angle = positions[i];
                            self.joint_manager.joints[i].target_velocity = velocities[i];
                         }
+                    } else {
+                        std.log.err("Position command missing values field", .{});
+                        return error.InvalidCommandPayload;
                     }
                 },
                 protocol.COMMAND_TYPE_VELOCITY => {
                     if (cmd.values) |velocities| {
-                        // TODO: Handle potential length mismatch
-                        const num_joints_to_set = @min(velocities.len, core.types.NUM_JOINTS);
-                        for (0..num_joints_to_set) |i| {
+                        // Check length
+                        if (velocities.len != core.types.NUM_JOINTS) {
+                            std.log.err("Velocity command length mismatch: expected {}, got {}", .{core.types.NUM_JOINTS, velocities.len});
+                            return error.InvalidCommandPayload;
+                        }
+                        // Length is now guaranteed to match
+                        for (0..core.types.NUM_JOINTS) |i| {
                             self.joint_manager.joints[i].target_velocity = velocities[i];
                         }
+                    } else {
+                        std.log.err("Velocity command missing values field", .{});
+                        return error.InvalidCommandPayload;
                     }
                 },
                 protocol.COMMAND_TYPE_TORQUE => {
                     if (cmd.values) |torques| {
+                        // Length check is handled within setTorques, which returns InvalidNumberOfTorques
                         try self.joint_manager.setTorques(torques);
+                    } else {
+                        std.log.err("Torque command missing values field", .{});
+                        return error.InvalidCommandPayload;
                     }
                 },
                 protocol.COMMAND_TYPE_CONTROL_MODE => {
-                    // Check if control_mode field exists in the command
                     if (cmd.control_mode) |mode_value| {
-                        // Parse parameters if they exist
-                        const params = cmd.parameters orelse protocol.ControlParameters{}; // Use named struct for default
-                        // Set the control mode using the new field
+                        const params = cmd.parameters orelse protocol.ControlParameters{};
                         try self.joint_manager.setControlMode(switch (mode_value) {
                             protocol.CONTROL_MODE_POSITION => .position,
                             protocol.CONTROL_MODE_VELOCITY => .velocity,
                             protocol.CONTROL_MODE_TORQUE => .torque,
-                            else => return error.InvalidControlMode,
+                            else => return error.InvalidControlMode, // Use defined error
                         }, .{
                             .stiffness = params.stiffness orelse 1.0,
                             .damping = params.damping orelse 0.1,
                             .feedforward = params.feedforward,
                         });
                     } else {
-                        // Handle error: control_mode value missing
-                        // TODO: Define this error properly
                         std.log.err("Received CONTROL_MODE command without control_mode value", .{});
-                        return error.InvalidCommandPayload; // Placeholder error
+                        return error.MissingControlModeValue; // Use defined error
                     }
                 },
                 protocol.COMMAND_TYPE_SAFETY => {
@@ -233,8 +250,11 @@ const UpdateThread = struct {
                             protocol.SAFETY_CMD_DISABLE => self.joint_manager.safety_monitor.disable(),
                             protocol.SAFETY_CMD_RESET => self.joint_manager.safety_monitor.reset(),
                             protocol.SAFETY_CMD_E_STOP => self.joint_manager.safety_monitor.emergencyStop(),
-                            else => return error.InvalidSafetyCommand,
+                            else => return error.InvalidSafetyCommand, // Use defined error
                         }
+                    } else {
+                         std.log.err("Safety command missing safety field", .{});
+                        return error.InvalidCommandPayload;
                     }
                 },
                 else => {},
@@ -559,7 +579,7 @@ pub const Communication = struct {
         return Communication{
             .allocator = allocator,
             .server = undefined,
-            .port = 8080,
+            .port = 9001,
         };
     }
 
