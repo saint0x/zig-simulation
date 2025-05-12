@@ -14,6 +14,7 @@ pub const JointManager = struct {
     safety_monitor: *safety.SafetyMonitor,
     collision_detector: *kinematics.collision_detection.CollisionDetection,
     fk: *kinematics.ForwardKinematics,
+    control_mode: types.ControlMode,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -32,6 +33,7 @@ pub const JointManager = struct {
             .safety_monitor = safety_monitor,
             .collision_detector = collision_detector,
             .fk = fk,
+            .control_mode = types.ControlMode.position,
         };
 
         // Initialize joints with default configs
@@ -42,6 +44,7 @@ pub const JointManager = struct {
                 .target_angle = 0,
                 .target_velocity = 0,
                 .current_torque = 0,
+                .target_torque = 0,
                 .temperature = 25.0,  // Room temperature
                 .current = 0,
                 .integral_term = 0,
@@ -75,6 +78,7 @@ pub const JointManager = struct {
                 .target_angle = 0,
                 .target_velocity = 0,
                 .current_torque = 0,
+                .target_torque = 0,
                 .temperature = 25.0,  // Room temperature
                 .current = 0,
                 .integral_term = 0,
@@ -109,14 +113,13 @@ pub const JointManager = struct {
     }
 
     pub fn getJointState(self: *JointManager, joint_id: types.JointId) types.JointState {
-        return self.joints[joint_id];
+        return self.joints[@intFromEnum(joint_id)];
     }
 
     pub fn getRobotState(self: *JointManager) types.RobotState {
-        return .{
-            .joints = self.joints,
-            .configs = self.configs,
-        };
+        // TODO: Implement actual logic to determine robot state
+        _ = self; // Keep self until proper logic is added
+        return types.RobotState.ready; // Placeholder
     }
 
     pub fn reset(self: *JointManager) void {
@@ -130,11 +133,32 @@ pub const JointManager = struct {
                 .target_angle = 0,
                 .target_velocity = 0,
                 .current_torque = 0,
+                .target_torque = 0,
                 .temperature = 25.0,  // Room temperature
                 .current = 0,
                 .integral_term = 0,
                 .last_error = 0,
             };
         }
+        self.control_mode = types.ControlMode.position;
+    }
+
+    pub fn setTorques(self: *JointManager, torques: []const f32) !void {
+        // TODO: Implement actual logic, possibly check control mode first
+        if (torques.len != types.NUM_JOINTS) {
+            return error.InvalidNumberOfTorques;
+        }
+        for (&self.joints, torques) |*joint, torque| {
+            joint.target_torque = torque;
+        }
+        self.control_mode = types.ControlMode.position;
+    }
+
+    pub fn setControlMode(self: *JointManager, mode: types.ControlMode, params: anytype) !void {
+        // TODO: Implement actual logic for switching control modes
+        // params might contain stiffness, damping, etc. for certain modes
+        _ = params;
+        self.control_mode = mode;
+        std.log.info("Set control mode to: {}", .{mode});
     }
 }; 

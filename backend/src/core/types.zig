@@ -49,6 +49,8 @@ pub const JointState = struct {
     target_velocity: f32,
     /// Current joint torque in Nm
     current_torque: f32,
+    /// Target joint torque in Nm
+    target_torque: f32,
     /// Motor temperature in degrees Celsius
     temperature: f32,
     /// Motor current in Amperes
@@ -71,6 +73,13 @@ pub const RobotState = enum {
     moving,
     /// Robot has encountered an error
     fault,
+};
+
+/// Control modes for joints
+pub const ControlMode = enum {
+    position,
+    velocity,
+    torque,
 };
 
 /// Complete robot state information

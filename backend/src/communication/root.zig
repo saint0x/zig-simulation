@@ -1,5 +1,8 @@
 const std = @import("std");
-const core = @import("core");
+
+// This file makes all public declarations in backend/src/communication/main.zig 
+// available when importing the 'communication' module.
+pub usingnamespace @import("main.zig");
 
 pub const Communication = @import("main.zig").Communication;
 

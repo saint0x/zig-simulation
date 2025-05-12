@@ -39,6 +39,7 @@ pub fn init(configs: ?[core.types.NUM_JOINTS]core.types.JointConfig, timing: *co
             .target_angle = 0,
             .target_velocity = 0,
             .current_torque = 0,
+            .target_torque = 0,
             .temperature = 25.0,  // Room temperature
             .current = 0,
             .integral_term = 0,

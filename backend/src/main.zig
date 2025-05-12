@@ -7,6 +7,7 @@ const core = @import("core");
 const joints = @import("joints");
 const safety = @import("safety");
 const kinematics = @import("kinematics");
+const communication = @import("communication");
 
 pub fn main() !void {
     // Initialize timing system for 1kHz control loop (1ms interval)
@@ -126,6 +127,24 @@ pub fn main() !void {
         &fk
     );
     defer joint_manager.deinit();
+
+    // Initialize and start the WebSocket server
+    const web_socket_port: u16 = 9001;
+    const comm_server = try communication.WebSocketServer.init(allocator, web_socket_port, joint_manager);
+    
+    // Spawn a thread for the communication server to listen for connections
+    // The server's listenAndServe() is blocking, so it needs its own thread.
+    // We will detach the thread as the main loop runs indefinitely.
+    // For a production system with a graceful shutdown, you might want to store the thread
+    // and join it on shutdown.
+    var server_thread = try std.Thread.spawn(.{}, struct {
+        fn run(server: *communication.WebSocketServer) !void {
+            try server.start();
+        }
+    }.run, .{comm_server});
+    server_thread.detach(); // Detach as main loop is infinite
+
+    std.log.info("WebSocket server started on port {d}", .{web_socket_port});
 
     // Power up the robot
     joint_manager.reset();

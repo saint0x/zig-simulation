@@ -95,6 +95,7 @@ pub fn build(b: *std.Build) void {
     });
     communication.addImport("core", core);
     communication.addImport("utils", utils);
+    communication.addImport("joints", joints);
 
     // Create the backend library
     const backend_lib = b.addStaticLibrary(.{

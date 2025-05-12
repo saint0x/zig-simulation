@@ -1,4 +1,4 @@
-Thought for 4 secondsTo create a 1:1 replica controller for the KUKA arm simulation, you'd need to build the following components:
+To create a 1:1 replica controller for the KUKA arm simulation, you'd need to build the following components:
 
 ### Hardware Requirements
 

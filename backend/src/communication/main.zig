@@ -1,4 +1,6 @@
 const std = @import("std");
+const Server = std.net.Server;
+const Address = std.net.Address;
 const core = @import("core");
 const joints = @import("joints");
 const protocol = @import("protocol.zig");
@@ -95,7 +97,7 @@ const UpdateThread = struct {
         }
 
         const state = protocol.JointStateMessage{
-            .timestamp_us = @as(u64, time.microTimestamp()),
+            .timestamp_us = @intCast(time.microTimestamp()),
             .positions = positions,
             .velocities = velocities,
             .torques = torques,
@@ -124,7 +126,13 @@ const UpdateThread = struct {
 
     fn sendSystemStatus(self: *UpdateThread) !void {
         const robot_state = self.joint_manager.getRobotState();
-        const safety_status = self.joint_manager.safety.getStatus();
+        const collision_result = self.joint_manager.safety_monitor.collision_detector.getCurrentResult();
+        
+        const safety_status_placeholder = protocol.SafetyStatus {
+            .soft_limits_active = true, // Placeholder
+            .emergency_stop = false, // Placeholder
+            .collision_detected = collision_result.collision_detected, 
+        };
         
         const status = protocol.SystemStatusMessage{
             .state = switch (robot_state) {
@@ -135,11 +143,7 @@ const UpdateThread = struct {
                 .powered_off => protocol.SYSTEM_STATE_WARNING,
             },
             .error_code = if (robot_state == .fault) "FAULT" else null,
-            .safety_status = .{
-                .soft_limits_active = safety_status.soft_limits_active,
-                .emergency_stop = safety_status.emergency_stop,
-                .collision_detected = safety_status.collision_detected,
-            },
+            .safety_status = safety_status_placeholder, // Use placeholder
             .control_mode = protocol.CONTROL_MODE_POSITION, // TODO: Get from joint manager
         };
 
@@ -170,16 +174,28 @@ const UpdateThread = struct {
             switch (cmd.type) {
                 protocol.COMMAND_TYPE_POSITION => {
                     if (cmd.values) |positions| {
-                        var velocities = [_]f32{0} ** 6;
+                        var velocities: [6]f32 = [_]f32{0} ** 6; // Default velocities
                         if (cmd.max_velocity) |max_vels| {
-                            @memcpy(&velocities, max_vels);
+                            // Ensure lengths match before copying
+                            if (max_vels.len >= 6) {
+                                @memcpy(&velocities, max_vels[0..6]); 
+                            }
                         }
-                        try self.joint_manager.setTargets(positions, velocities);
+                        // TODO: Handle potential length mismatch between positions/velocities and NUM_JOINTS
+                        const num_joints_to_set = @min(positions.len, core.types.NUM_JOINTS);
+                        for (0..num_joints_to_set) |i| {
+                           self.joint_manager.joints[i].target_angle = positions[i];
+                           self.joint_manager.joints[i].target_velocity = velocities[i];
+                        }
                     }
                 },
                 protocol.COMMAND_TYPE_VELOCITY => {
                     if (cmd.values) |velocities| {
-                        try self.joint_manager.setVelocities(velocities);
+                        // TODO: Handle potential length mismatch
+                        const num_joints_to_set = @min(velocities.len, core.types.NUM_JOINTS);
+                        for (0..num_joints_to_set) |i| {
+                            self.joint_manager.joints[i].target_velocity = velocities[i];
+                        }
                     }
                 },
                 protocol.COMMAND_TYPE_TORQUE => {
@@ -188,8 +204,12 @@ const UpdateThread = struct {
                     }
                 },
                 protocol.COMMAND_TYPE_CONTROL_MODE => {
-                    if (cmd.parameters) |params| {
-                        try self.joint_manager.setControlMode(switch (cmd.values.?[0]) {
+                    // Check if control_mode field exists in the command
+                    if (cmd.control_mode) |mode_value| {
+                        // Parse parameters if they exist
+                        const params = cmd.parameters orelse protocol.ControlParameters{}; // Use named struct for default
+                        // Set the control mode using the new field
+                        try self.joint_manager.setControlMode(switch (mode_value) {
                             protocol.CONTROL_MODE_POSITION => .position,
                             protocol.CONTROL_MODE_VELOCITY => .velocity,
                             protocol.CONTROL_MODE_TORQUE => .torque,
@@ -199,15 +219,20 @@ const UpdateThread = struct {
                             .damping = params.damping orelse 0.1,
                             .feedforward = params.feedforward,
                         });
+                    } else {
+                        // Handle error: control_mode value missing
+                        // TODO: Define this error properly
+                        std.log.err("Received CONTROL_MODE command without control_mode value", .{});
+                        return error.InvalidCommandPayload; // Placeholder error
                     }
                 },
                 protocol.COMMAND_TYPE_SAFETY => {
                     if (cmd.safety) |safety_cmd| {
                         switch (safety_cmd.type) {
-                            protocol.SAFETY_CMD_ENABLE => try self.joint_manager.safety.enable(),
-                            protocol.SAFETY_CMD_DISABLE => try self.joint_manager.safety.disable(),
-                            protocol.SAFETY_CMD_RESET => try self.joint_manager.safety.reset(),
-                            protocol.SAFETY_CMD_E_STOP => try self.joint_manager.safety.emergencyStop(),
+                            protocol.SAFETY_CMD_ENABLE => self.joint_manager.safety_monitor.enable(),
+                            protocol.SAFETY_CMD_DISABLE => self.joint_manager.safety_monitor.disable(),
+                            protocol.SAFETY_CMD_RESET => self.joint_manager.safety_monitor.reset(),
+                            protocol.SAFETY_CMD_E_STOP => self.joint_manager.safety_monitor.emergencyStop(),
                             else => return error.InvalidSafetyCommand,
                         }
                     }
@@ -218,15 +243,18 @@ const UpdateThread = struct {
     }
 
     fn checkAndSendCollisions(self: *UpdateThread) !void {
-        const collision_result = self.joint_manager.collision_detector.getLastCollision();
-        if (collision_result.detected) {
+        const collision_result = self.joint_manager.safety_monitor.collision_detector.getCurrentResult();
+        if (collision_result.collision_detected) {
+            const link1_name: []const u8 = if (collision_result.link1) |l1| @tagName(l1) else "unknown";
+            const link2_name: []const u8 = if (collision_result.link2) |l2| @tagName(l2) else "unknown";
+
             const collision_msg = protocol.CollisionMessage{
-                .detected = true,
-                .link1 = collision_result.link1_name,
-                .link2 = collision_result.link2_name,
-                .position = collision_result.position,
-                .penetration_depth = collision_result.penetration_depth,
-                .contact_normal = collision_result.contact_normal,
+                .detected = collision_result.collision_detected,
+                .link1 = link1_name,
+                .link2 = link2_name,
+                .position = if (collision_result.collision_point) |p| [_]f32{p.x, p.y, p.z} else [_]f32{ 0, 0, 0 },
+                .penetration_depth = collision_result.min_distance,
+                .contact_normal = [_]f32{ 0, 0, 0 },
             };
 
             const json_string = try std.json.stringifyAlloc(self.allocator, collision_msg, .{});
@@ -249,9 +277,9 @@ const UpdateThread = struct {
     }
 };
 
-const WebSocketServer = struct {
+pub const WebSocketServer = struct {
     allocator: std.mem.Allocator,
-    server: std.net.StreamServer,
+    server: Server,
     clients: std.ArrayList(*Client),
     update_thread: *UpdateThread,
     running: bool,
@@ -260,9 +288,12 @@ const WebSocketServer = struct {
 
     pub fn init(allocator: std.mem.Allocator, port: u16, joint_manager: *joints.JointManager) !*WebSocketServer {
         const self = try allocator.create(WebSocketServer);
+        const listen_address = try Address.parseIp4("127.0.0.1", port);
+        const actual_server = try listen_address.listen(.{ .reuse_address = true });
+
         self.* = .{
             .allocator = allocator,
-            .server = std.net.StreamServer.init(.{ .reuse_address = true }),
+            .server = actual_server,
             .clients = std.ArrayList(*Client).init(allocator),
             .update_thread = try UpdateThread.init(allocator, &self.clients, joint_manager),
             .running = false,
@@ -270,7 +301,6 @@ const WebSocketServer = struct {
             .mutex = Thread.Mutex{},
         };
 
-        try self.server.listen(std.net.Address.parseIp4("127.0.0.1", port) catch return error.InvalidAddress);
         return self;
     }
 
@@ -315,7 +345,7 @@ const WebSocketServer = struct {
                     self.allocator.destroy(client);
                     continue;
                 };
-                try Thread.spawn(.{}, handleClient, .{ self, client });
+                _ = try Thread.spawn(.{}, handleClient, .{ self, client });
             } else |err| {
                 std.log.err("WebSocket handshake failed: {}", .{err});
                 client.deinit();
@@ -326,10 +356,11 @@ const WebSocketServer = struct {
 
     fn handleClient(self: *WebSocketServer, client: *Client) !void {
         // Send connection status to all clients
+        const current_timestamp_val = time.microTimestamp();
         const status = protocol.ConnectionStatusMessage{
             .status = protocol.CONNECTION_STATUS_CONNECTED,
             .message = "New client connected",
-            .timestamp_us = @as(u64, time.microTimestamp()),
+            .timestamp_us = @intCast(current_timestamp_val),
         };
         const json_string = try std.json.stringifyAlloc(self.allocator, status, .{});
         defer self.allocator.free(json_string);
@@ -361,10 +392,11 @@ const WebSocketServer = struct {
             self.allocator.destroy(client);
 
             // Try to send disconnection status
+            const current_timestamp_val_disconnect = time.microTimestamp();
             if (std.json.stringifyAlloc(self.allocator, protocol.ConnectionStatusMessage{
                 .status = protocol.CONNECTION_STATUS_DISCONNECTED,
                 .message = "Client disconnected",
-                .timestamp_us = @as(u64, time.microTimestamp()),
+                .timestamp_us = @intCast(current_timestamp_val_disconnect),
             }, .{})) |disconnect_json| {
                 defer self.allocator.free(disconnect_json);
 
@@ -392,11 +424,12 @@ const WebSocketServer = struct {
             };
 
             if (frame.type == protocol.MESSAGE_TYPE_COMMAND) {
-                const cmd = std.json.parse(protocol.CommandMessage, self.allocator, frame.payload, .{}) catch |err| {
+                const parsed_cmd = std.json.parseFromSlice(protocol.CommandMessage, self.allocator, frame.payload, .{}) catch |err| {
                     std.log.err("Failed to parse command: {}", .{err});
                     continue;
                 };
-                try self.update_thread.command_queue.append(cmd);
+                std.log.info("Received command of type: {}", .{parsed_cmd.value.type});
+                try self.update_thread.command_queue.append(parsed_cmd.value);
             }
         }
     }
@@ -404,11 +437,11 @@ const WebSocketServer = struct {
 
 const Client = struct {
     allocator: std.mem.Allocator,
-    connection: std.net.StreamServer.Connection,
+    connection: Server.Connection,
     write_buffer: [8192]u8,
     read_buffer: [8192]u8,
 
-    pub fn init(allocator: std.mem.Allocator, connection: std.net.StreamServer.Connection) !*Client {
+    pub fn init(allocator: std.mem.Allocator, connection: Server.Connection) !*Client {
         const self = try allocator.create(Client);
         self.* = .{
             .allocator = allocator,

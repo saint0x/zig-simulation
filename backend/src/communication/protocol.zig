@@ -7,6 +7,7 @@ pub const MESSAGE_TYPE_SYSTEM_STATUS = 1;  // JSON
 pub const MESSAGE_TYPE_COLLISION_DATA = 2; // JSON
 pub const MESSAGE_TYPE_COMMAND = 3;        // JSON from frontend
 pub const MESSAGE_TYPE_CONNECTION_STATUS = 4; // JSON
+pub const MESSAGE_TYPE_ROBOT_STATE = 5; // Binary format for RobotStateMessage
 
 // System states
 pub const SYSTEM_STATE_READY = 0;
@@ -37,8 +38,24 @@ pub const CONNECTION_STATUS_CONNECTED = 0;
 pub const CONNECTION_STATUS_DISCONNECTED = 1;
 pub const CONNECTION_STATUS_ERROR = 2;
 
+pub const MessageType = enum(u8) {
+    JOINT_STATE = MESSAGE_TYPE_JOINT_STATE,
+    SYSTEM_STATUS = MESSAGE_TYPE_SYSTEM_STATUS,
+    COLLISION_DATA = MESSAGE_TYPE_COLLISION_DATA,
+    COMMAND = MESSAGE_TYPE_COMMAND,
+    CONNECTION_STATUS = MESSAGE_TYPE_CONNECTION_STATUS,
+    ROBOT_STATE = MESSAGE_TYPE_ROBOT_STATE,
+};
+
+pub const GripperState = enum(u8) {
+    OPEN,
+    CLOSED,
+    MOVING,
+    ERROR,
+};
+
 // Binary format for high-frequency joint states
-pub const JointStateMessage = packed struct {
+pub const JointStateMessage = extern struct {
     timestamp_us: u64,
     positions: [6]f32,
     velocities: [6]f32,
@@ -69,16 +86,20 @@ pub const CollisionMessage = struct {
     contact_normal: [3]f32,  // nx, ny, nz
 };
 
+// Named struct for control parameters
+pub const ControlParameters = struct {
+    stiffness: ?f32 = null,
+    damping: ?f32 = null,
+    feedforward: bool = false,
+};
+
 pub const CommandMessage = struct {
     type: u8,  // Uses COMMAND_TYPE_* constants
+    control_mode: ?u8 = null,
     values: ?[]f32 = null,
     max_velocity: ?[]f32 = null,
     max_acceleration: ?[]f32 = null,
-    parameters: ?struct {
-        stiffness: ?f32 = null,
-        damping: ?f32 = null,
-        feedforward: bool = false,
-    } = null,
+    parameters: ?ControlParameters = null, // Use named struct
     safety: ?struct {
         type: u8,  // Uses SAFETY_CMD_* constants
         zone_id: ?[]const u8 = null,
@@ -90,24 +111,26 @@ pub const ConnectionStatusMessage = struct {
     message: ?[]const u8,
     timestamp_us: u64,
 
-    pub fn jsonStringify(self: ConnectionStatusMessage, options: std.json.StringifyOptions, writer: anytype) !void {
-        try writer.writeAll("{\"status\":");
+    pub fn jsonStringify(self: ConnectionStatusMessage, writer: anytype) !void {
+        try writer.write("{\"status\":");
         const status_str = switch (self.status) {
-            CONNECTION_STATUS_CONNECTED => "connected",
-            CONNECTION_STATUS_DISCONNECTED => "disconnected",
-            CONNECTION_STATUS_ERROR => "error",
-            else => "unknown",
+            CONNECTION_STATUS_CONNECTED => "\"connected\"",
+            CONNECTION_STATUS_DISCONNECTED => "\"disconnected\"",
+            CONNECTION_STATUS_ERROR => "\"error\"",
+            else => "\"unknown\"",
         };
-        try std.json.stringify(status_str, options, writer);
-        try writer.writeAll(",\"message\":");
+        try writer.write(status_str);
+        try writer.write(",\"message\":");
         if (self.message) |msg| {
-            try std.json.stringify(msg, options, writer);
+            try writer.write("\"");
+            try writer.write(msg); // Assuming msg doesn't need further JSON escaping for this context
+            try writer.write("\"");
         } else {
-            try writer.writeAll("null");
+            try writer.write("null");
         }
-        try writer.writeAll(",\"timestamp_us\":");
-        try std.json.stringify(self.timestamp_us, options, writer);
-        try writer.writeAll("}");
+        try writer.write(",\"timestamp_us\":");
+        try writer.print("{}", .{self.timestamp_us}); // Use print for basic number formatting
+        try writer.write("}");
     }
 };
 
@@ -120,13 +143,31 @@ pub const Frame = struct {
     
     pub fn encode(self: Self, writer: anytype) !void {
         try writer.writeByte(self.type);
-        try writer.writeIntLittle(u32, self.payload.len);
+        var len_bytes: [4]u8 = undefined;
+        const payload_len_u32: u32 = @truncate(self.payload.len);
+
+        // Manual little-endian u32 to 4-byte array
+        len_bytes[0] = @truncate(payload_len_u32);
+        len_bytes[1] = @truncate(payload_len_u32 >> 8);
+        len_bytes[2] = @truncate(payload_len_u32 >> 16);
+        len_bytes[3] = @truncate(payload_len_u32 >> 24);
+
+        try writer.writeAll(&len_bytes);
         try writer.writeAll(self.payload);
     }
     
     pub fn decode(reader: anytype, allocator: std.mem.Allocator) !Self {
         const msg_type = try reader.readByte();
-        const payload_len = try reader.readIntLittle(u32);
+        var len_bytes: [4]u8 = undefined;
+        try reader.readNoEof(&len_bytes);
+
+        // Manual little-endian 4-byte array to u32
+        const byte0 = @as(u32, len_bytes[0]);
+        const byte1 = @as(u32, len_bytes[1]) << 8;
+        const byte2 = @as(u32, len_bytes[2]) << 16;
+        const byte3 = @as(u32, len_bytes[3]) << 24;
+        const payload_len = byte0 | byte1 | byte2 | byte3;
+
         const payload = try allocator.alloc(u8, payload_len);
         try reader.readNoEof(payload);
         
@@ -135,4 +176,19 @@ pub const Frame = struct {
             .payload = payload,
         };
     }
+};
+
+pub const RobotStateMessage = extern struct {
+    message_type: MessageType = .ROBOT_STATE,
+    timestamp_us: u64,
+    joint_positions: [6]u32,
+    joint_velocities: [6]u32,
+    joint_torques: [6]u32,
+    object_position: [3]u32,
+    object_orientation: [4]u32,
+    object_linear_velocity: [3]u32,
+    object_angular_velocity: [3]u32,
+    gripper_state: GripperState,
+    end_effector_pose: [7]u32,
+    padding: [2]u8 = undefined,
 }; 
