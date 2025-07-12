@@ -103,13 +103,13 @@ pub fn main() !void {
 
     // Initialize joint limits (7 joints total) with realistic KUKA KR6 limits
     const joint_limits = [_]safety.types.JointLimit{
-        .{ .min_angle = -180, .max_angle = 180, .max_velocity = 125, .max_acceleration = 300 }, // base_rotation
-        .{ .min_angle = -180, .max_angle = 180, .max_velocity = 95, .max_acceleration = 250 },  // shoulder_rotation  
-        .{ .min_angle = -180, .max_angle = 180, .max_velocity = 155, .max_acceleration = 350 }, // elbow_rotation
-        .{ .min_angle = -180, .max_angle = 180, .max_velocity = 185, .max_acceleration = 400 }, // wrist_bend
-        .{ .min_angle = -180, .max_angle = 180, .max_velocity = 205, .max_acceleration = 450 }, // wrist_rotation
-        .{ .min_angle = -180, .max_angle = 180, .max_velocity = 255, .max_acceleration = 500 }, // tool_rotation
-        .{ .min_angle = -180, .max_angle = 180, .max_velocity = 95, .max_acceleration = 200 },  // gripper
+        .{ .min_angle = -180, .max_angle = 180, .max_velocity = 160, .max_acceleration = 300 }, // base_rotation
+        .{ .min_angle = -180, .max_angle = 180, .max_velocity = 135, .max_acceleration = 250 },  // shoulder_rotation  
+        .{ .min_angle = -180, .max_angle = 180, .max_velocity = 190, .max_acceleration = 350 }, // elbow_rotation
+        .{ .min_angle = -180, .max_angle = 180, .max_velocity = 210, .max_acceleration = 400 }, // wrist_bend
+        .{ .min_angle = -180, .max_angle = 180, .max_velocity = 230, .max_acceleration = 450 }, // wrist_rotation
+        .{ .min_angle = -180, .max_angle = 180, .max_velocity = 290, .max_acceleration = 500 }, // tool_rotation
+        .{ .min_angle = -180, .max_angle = 180, .max_velocity = 130, .max_acceleration = 200 },  // gripper
     };
 
     // Initialize safety monitor
@@ -132,7 +132,6 @@ pub fn main() !void {
     // Initialize and start the WebSocket server
     const web_socket_port: u16 = 9001;
     const comm_server = try communication.WebSocketServer.init(allocator, web_socket_port, joint_manager);
-    defer comm_server.stop(); // Ensure cleanup on exit
     
     // Spawn a thread for the communication server to listen for connections
     var server_thread = try std.Thread.spawn(.{}, struct {
@@ -150,12 +149,11 @@ pub fn main() !void {
     // Add graceful shutdown handling
     const running: bool = true;
     var iteration_count: u64 = 0;
-    const max_iterations = 1000; // Limit for testing - remove for production
 
-    std.log.info("Starting main control loop (limited to {} iterations for testing)", .{max_iterations});
+    std.log.info("Starting main control loop (production mode - infinite loop)", .{});
 
-    // Main control loop
-    while (running and iteration_count < max_iterations) {
+    // Main control loop - production mode
+    while (running) {
         // Wait for next control cycle
         const current_time: i64 = @intCast(std.time.nanoTimestamp());
         if (!timing.shouldUpdate(current_time)) continue;
@@ -174,14 +172,15 @@ pub fn main() !void {
         
         iteration_count += 1;
         
-        // Periodic status logging
-        if (iteration_count % 1000 == 0) {
-            std.log.info("Control loop iteration: {}", .{iteration_count});
+        // Periodic status logging (every 10 seconds at 1kHz = 10000 iterations)
+        if (iteration_count % 10000 == 0) {
+            std.log.info("Control loop running: {} iterations completed", .{iteration_count});
         }
     }
     
     std.log.info("Main control loop completed. Shutting down...", .{});
     
-    // Signal server to stop and wait for thread to finish
+    // Proper shutdown sequence: stop server first, then wait for thread
+    comm_server.stop();
     server_thread.join();
 }

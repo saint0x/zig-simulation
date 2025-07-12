@@ -50,28 +50,28 @@ const UpdateThread = struct {
     fn run(self: *UpdateThread) !void {
         var timer = try time.Timer.start();
         var last_status_update: u64 = 0;
-        var last_collision_check: u64 = 0;
+        // var last_collision_check: u64 = 0; // Temporarily unused for debugging
         const update_interval_ns = time.ns_per_ms; // 1kHz
         const status_interval_ns = 10 * time.ns_per_ms; // 100Hz
-        const collision_interval_ns = 10 * time.ns_per_ms; // 100Hz
+        // const collision_interval_ns = 10 * time.ns_per_ms; // 100Hz // Temporarily unused for debugging
 
         while (self.running) {
             const now = timer.read();
 
-            // Joint state updates (1kHz)
-            try self.sendJointStates();
+            // TEMPORARILY DISABLED: Joint state updates (1kHz) for debugging
+            // try self.sendJointStates();
 
-            // System status updates (100Hz)
-            if (now - last_status_update >= status_interval_ns) {
+            // System status updates (100Hz) - reduced frequency for debugging
+            if (now - last_status_update >= status_interval_ns * 10) { // 10Hz instead of 100Hz
                 try self.sendSystemStatus();
                 last_status_update = now;
             }
 
-            // Collision detection updates (100Hz)
-            if (now - last_collision_check >= collision_interval_ns) {
-                try self.checkAndSendCollisions();
-                last_collision_check = now;
-            }
+            // TEMPORARILY DISABLED: Collision detection updates for debugging
+            // if (now - last_collision_check >= collision_interval_ns) {
+            //     try self.checkAndSendCollisions();
+            //     last_collision_check = now;
+            // }
 
             // Process any pending commands
             try self.processCommands();
@@ -114,18 +114,15 @@ const UpdateThread = struct {
         @memset(&bytes, 0);
         @memcpy(&bytes, std.mem.asBytes(&state));
 
-        const frame = protocol.Frame{
-            .type = protocol.MESSAGE_TYPE_JOINT_STATE,
-            .payload = &bytes,
-        };
-
         self.mutex.lock();
         defer self.mutex.unlock();
 
         for (self.clients.items) |client| {
             var stream = std.io.fixedBufferStream(&client.write_buffer);
-            try frame.encode(stream.writer());
-            _ = try client.connection.stream.write(client.write_buffer[0..stream.pos]);
+            try protocol.MessageEncoder.sendBinaryMessage(&bytes, stream.writer());
+            _ = client.connection.stream.write(client.write_buffer[0..stream.pos]) catch |err| {
+                std.log.warn("Failed to send joint states to client: {}", .{err});
+            };
         }
     }
 
@@ -159,18 +156,18 @@ const UpdateThread = struct {
         const json_string = try std.json.stringifyAlloc(self.allocator, status, .{});
         defer self.allocator.free(json_string);
 
-        const frame = protocol.Frame{
-            .type = protocol.MESSAGE_TYPE_SYSTEM_STATUS,
-            .payload = json_string,
-        };
-
         self.mutex.lock();
         defer self.mutex.unlock();
 
         for (self.clients.items) |client| {
+            // Reset buffer and create fresh stream
+            @memset(&client.write_buffer, 0);
             var stream = std.io.fixedBufferStream(&client.write_buffer);
-            try frame.encode(stream.writer());
-            _ = try client.connection.stream.write(client.write_buffer[0..stream.pos]);
+            
+            try protocol.MessageEncoder.sendJsonMessage(json_string, stream.writer());
+            _ = client.connection.stream.write(client.write_buffer[0..stream.pos]) catch |err| {
+                std.log.warn("Failed to send system status to client: {}", .{err});
+            };
         }
     }
 
@@ -285,18 +282,18 @@ const UpdateThread = struct {
             const json_string = try std.json.stringifyAlloc(self.allocator, collision_msg, .{});
             defer self.allocator.free(json_string);
 
-            const frame = protocol.Frame{
-                .type = protocol.MESSAGE_TYPE_COLLISION_DATA,
-                .payload = json_string,
-            };
-
             self.mutex.lock();
             defer self.mutex.unlock();
 
             for (self.clients.items) |client| {
+                // Reset buffer and create fresh stream
+                @memset(&client.write_buffer, 0);
                 var stream = std.io.fixedBufferStream(&client.write_buffer);
-                try frame.encode(stream.writer());
-                _ = try client.connection.stream.write(client.write_buffer[0..stream.pos]);
+                
+                try protocol.MessageEncoder.sendJsonMessage(json_string, stream.writer());
+                _ = client.connection.stream.write(client.write_buffer[0..stream.pos]) catch |err| {
+                    std.log.warn("Failed to send collision data to client: {}", .{err});
+                };
             }
         }
     }
@@ -341,9 +338,9 @@ pub const WebSocketServer = struct {
         self.thread.join();
         self.update_thread.deinit(); // Properly cleanup UpdateThread
         
+        // Clean up all client connections (arena cleanup automatic)
         for (self.clients.items) |client| {
-            client.deinit();
-            self.allocator.destroy(client);
+            client.deinit(); // Arena cleanup happens here, including main_allocator.destroy(self)
         }
         self.clients.deinit();
         self.allocator.destroy(self);
@@ -351,58 +348,84 @@ pub const WebSocketServer = struct {
 
     fn acceptLoop(self: *WebSocketServer) !void {
         while (self.running) {
+            std.log.info("Waiting for WebSocket connection...", .{});
             const connection = self.server.accept() catch |err| {
                 if (err == error.ConnectionAborted) break;
                 std.log.err("Failed to accept connection: {}", .{err});
                 continue;
             };
 
+            std.log.info("New connection accepted, creating client...", .{});
             const client = Client.init(self.allocator, connection) catch |err| {
                 std.log.err("Failed to initialize client: {}", .{err});
                 connection.stream.close();
                 continue;
             };
 
+            std.log.info("Performing WebSocket handshake...", .{});
             if (client.performHandshake()) |_| {
+                std.log.info("Handshake successful, adding client to list...", .{});
                 self.clients.append(client) catch |err| {
                     std.log.err("Failed to add client: {}", .{err});
-                    client.deinit();
-                    self.allocator.destroy(client);
+                    client.deinit(); // Arena cleanup handles main_allocator.destroy(client)
                     continue;
                 };
+                std.log.info("Spawning client handler thread...", .{});
                 _ = try Thread.spawn(.{}, handleClient, .{ self, client });
+                std.log.info("Client connected successfully!", .{});
             } else |err| {
                 std.log.err("WebSocket handshake failed: {}", .{err});
-                client.deinit();
-                self.allocator.destroy(client);
+                client.deinit(); // Arena cleanup handles main_allocator.destroy(client)
             }
         }
     }
 
     fn handleClient(self: *WebSocketServer, client: *Client) !void {
-        // Send connection status to all clients
+        std.log.info("=== Starting client handler for new connection ===", .{});
+        
+        // Send connection status to all clients  
+        std.log.info("Preparing connection status message...", .{});
         const current_timestamp_val = time.microTimestamp();
         const status = protocol.ConnectionStatusMessage{
-            .status = protocol.CONNECTION_STATUS_CONNECTED,
+            .status = "connected",
             .message = "New client connected",
             .timestamp_us = @intCast(current_timestamp_val),
         };
         const json_string = try std.json.stringifyAlloc(self.allocator, status, .{});
         defer self.allocator.free(json_string);
-
-        const connect_frame = protocol.Frame{
-            .type = protocol.MESSAGE_TYPE_CONNECTION_STATUS,
-            .payload = json_string,
-        };
+        std.log.info("Connection status JSON: {s}", .{json_string});
 
         self.mutex.lock();
         defer self.mutex.unlock();
 
+        std.log.info("Sending connection status to {} clients...", .{self.clients.items.len});
         for (self.clients.items) |c| {
+            // Reset buffer and create fresh stream
+            @memset(&c.write_buffer, 0);
             var stream = std.io.fixedBufferStream(&c.write_buffer);
-            try connect_frame.encode(stream.writer());
-            _ = try c.connection.stream.write(c.write_buffer[0..stream.pos]);
+            
+            std.log.info("Encoding JSON message: {s}", .{json_string});
+            try protocol.MessageEncoder.sendJsonMessage(json_string, stream.writer());
+            
+            const frame_size = stream.pos;
+            std.log.info("Encoded WebSocket frame size: {} bytes", .{frame_size});
+            
+            // Log first few bytes of frame for debugging
+            const debug_bytes = c.write_buffer[0..@min(16, frame_size)];
+            var hex_string: [32]u8 = undefined;
+            for (debug_bytes, 0..) |byte, i| {
+                _ = std.fmt.bufPrint(hex_string[i*2..i*2+2], "{X:0>2}", .{byte}) catch break;
+            }
+            std.log.info("Frame start (hex): {s}", .{hex_string[0..debug_bytes.len*2]});
+            
+            const bytes_written = c.connection.stream.write(c.write_buffer[0..frame_size]) catch |err| {
+                std.log.warn("Failed to send connection status to client: {}", .{err});
+                continue;
+            };
+            std.log.info("Successfully sent {} bytes to client", .{bytes_written});
         }
+        
+        std.log.info("=== Starting message reading loop for client ===", .{});
 
         // Ensure cleanup happens when function exits
         defer {
@@ -413,26 +436,23 @@ pub const WebSocketServer = struct {
                     break;
                 }
             }
-            client.deinit();
-            self.allocator.destroy(client);
+            client.deinit(); // Arena cleanup handles main_allocator.destroy(client)
 
             // Try to send disconnection status
             const current_timestamp_val_disconnect = time.microTimestamp();
             if (std.json.stringifyAlloc(self.allocator, protocol.ConnectionStatusMessage{
-                .status = protocol.CONNECTION_STATUS_DISCONNECTED,
+                .status = "disconnected",
                 .message = "Client disconnected",
                 .timestamp_us = @intCast(current_timestamp_val_disconnect),
             }, .{})) |disconnect_json| {
                 defer self.allocator.free(disconnect_json);
 
-                const disconnect_frame = protocol.Frame{
-                    .type = protocol.MESSAGE_TYPE_CONNECTION_STATUS,
-                    .payload = disconnect_json,
-                };
-
                 for (self.clients.items) |c| {
+                    // Reset buffer and create fresh stream
+                    @memset(&c.write_buffer, 0);
                     var stream = std.io.fixedBufferStream(&c.write_buffer);
-                    if (disconnect_frame.encode(stream.writer())) |_| {
+                    
+                    if (protocol.MessageEncoder.sendJsonMessage(disconnect_json, stream.writer())) |_| {
                         _ = c.connection.stream.write(c.write_buffer[0..stream.pos]) catch {};
                     } else |_| {}
                 }
@@ -441,35 +461,67 @@ pub const WebSocketServer = struct {
 
         var frame_buffer: [4096]u8 = undefined;
         while (true) {
-            const frame = client.readFrame(&frame_buffer) catch |err| {
+            std.log.info("Waiting for WebSocket frame from client...", .{});
+            const ws_frame = protocol.WebSocketFrame.decode(client.connection.stream.reader(), &frame_buffer) catch |err| {
                 if (err != error.EndOfStream) {
-                    std.log.err("Error reading frame: {}", .{err});
+                    std.log.err("Error reading WebSocket frame: {}", .{err});
+                } else {
+                    std.log.info("Client disconnected (EndOfStream)", .{});
                 }
                 break;
             };
 
-            if (frame.type == protocol.MESSAGE_TYPE_COMMAND) {
-                const parsed_cmd = std.json.parseFromSlice(protocol.CommandMessage, self.allocator, frame.payload, .{}) catch |err| {
-                    std.log.err("Failed to parse command: {}", .{err});
-                    continue;
-                };
-                std.log.info("Received command of type: {}", .{parsed_cmd.value.type});
-                try self.update_thread.command_queue.append(parsed_cmd.value);
+            std.log.info("Received WebSocket frame - opcode: {}, payload size: {}", .{ws_frame.opcode, ws_frame.payload.len});
+            
+            // Handle different WebSocket frame types
+            switch (ws_frame.opcode) {
+                protocol.WebSocketFrame.OPCODE_TEXT => {
+                    // Text frame should contain JSON command
+                    const parsed_cmd = std.json.parseFromSlice(protocol.CommandMessage, client.client_allocator, ws_frame.payload, .{}) catch |err| {
+                        std.log.err("Failed to parse JSON command: {}", .{err});
+                        continue;
+                    };
+                    // No defer needed - arena cleanup handles it automatically on client disconnect
+                    std.log.info("Received command of type: {}", .{parsed_cmd.value.type});
+                    try self.update_thread.command_queue.append(parsed_cmd.value);
+                },
+                protocol.WebSocketFrame.OPCODE_CLOSE => {
+                    std.log.info("Client sent close frame, disconnecting...", .{});
+                    break;
+                },
+                protocol.WebSocketFrame.OPCODE_PING => {
+                    // Respond with pong
+                    var stream = std.io.fixedBufferStream(&client.write_buffer);
+                    try protocol.WebSocketFrame.encodePong(ws_frame.payload, stream.writer());
+                    _ = client.connection.stream.write(client.write_buffer[0..stream.pos]) catch {};
+                },
+                else => {
+                    std.log.warn("Received unsupported WebSocket frame type: {}", .{ws_frame.opcode});
+                },
             }
         }
     }
 };
 
 const Client = struct {
-    allocator: std.mem.Allocator,
+    main_allocator: std.mem.Allocator,  // For client list management
+    arena: std.heap.ArenaAllocator,     // For all client data
+    client_allocator: std.mem.Allocator, // Convenience wrapper for arena.allocator()
     connection: Server.Connection,
     write_buffer: [8192]u8,
     read_buffer: [8192]u8,
 
-    pub fn init(allocator: std.mem.Allocator, connection: Server.Connection) !*Client {
-        const self = try allocator.create(Client);
+    pub fn init(main_allocator: std.mem.Allocator, connection: Server.Connection) !*Client {
+        const self = try main_allocator.create(Client);
+        errdefer main_allocator.destroy(self);
+        
+        var arena = std.heap.ArenaAllocator.init(main_allocator);
+        errdefer arena.deinit();
+        
         self.* = .{
-            .allocator = allocator,
+            .main_allocator = main_allocator,
+            .arena = arena,
+            .client_allocator = arena.allocator(),
             .connection = connection,
             .write_buffer = undefined,
             .read_buffer = undefined,
@@ -479,46 +531,61 @@ const Client = struct {
 
     pub fn deinit(self: *Client) void {
         self.connection.stream.close();
+        self.arena.deinit(); // Cleans up ALL client memory at once
+        self.main_allocator.destroy(self);
     }
 
     pub fn performHandshake(self: *Client) !void {
+        std.log.info("Reading handshake request...", .{});
         var buffer: [1024]u8 = undefined;
         const bytes_read = try self.connection.stream.read(&buffer);
         const request = buffer[0..bytes_read];
+        std.log.info("Read {} bytes from client", .{bytes_read});
 
         // Parse HTTP request and verify it's a WebSocket upgrade request
+        std.log.info("Validating WebSocket upgrade request...", .{});
         if (!std.mem.startsWith(u8, request, "GET")) return error.InvalidRequest;
         if (!std.mem.containsAtLeast(u8, request, 1, "Upgrade: websocket")) return error.NotWebSocket;
 
         // Extract the Sec-WebSocket-Key header
+        std.log.info("Extracting WebSocket key...", .{});
         var key_start = std.mem.indexOf(u8, request, "Sec-WebSocket-Key: ") orelse return error.NoKey;
         key_start += "Sec-WebSocket-Key: ".len;
         const key_end = std.mem.indexOfPos(u8, request, key_start, "\r\n") orelse return error.InvalidKey;
         const client_key = request[key_start..key_end];
+        std.log.info("Found client key: {s}", .{client_key});
 
         // Generate the accept key
+        std.log.info("Generating accept key with SHA1...", .{});
         const magic_string = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-        var hasher = crypto.hash.Sha1.init(.{});
-        hasher.update(client_key);
-        hasher.update(magic_string);
+        
+        // Use stack buffer for concatenation (WebSocket key is max 24 chars + magic 36 chars = 60 max)
+        var combined_buffer: [128]u8 = undefined;
+        const combined_key = std.fmt.bufPrint(&combined_buffer, "{s}{s}", .{ client_key, magic_string }) catch return error.KeyTooLong;
+        std.log.info("Combined key length: {}", .{combined_key.len});
+        
+        // Use SHA1 hash
         var accept_key: [20]u8 = undefined;
-        hasher.final(&accept_key);
+        crypto.hash.Sha1.hash(combined_key, &accept_key, .{});
+        std.log.info("SHA1 hash completed", .{});
 
         // Encode the accept key in base64
         var accept_key_base64: [28]u8 = undefined;
         _ = std.base64.standard.Encoder.encode(&accept_key_base64, &accept_key);
 
-        // Send the WebSocket handshake response
-        const response = try std.fmt.allocPrint(self.allocator,
+        // Send the WebSocket handshake response using stack buffer
+        var response_buffer: [512]u8 = undefined;
+        const response = try std.fmt.bufPrint(&response_buffer,
             \\HTTP/1.1 101 Switching Protocols\r\n
             \\Upgrade: websocket\r\n
             \\Connection: Upgrade\r\n
             \\Sec-WebSocket-Accept: {s}\r\n
             \\\r\n
         , .{accept_key_base64});
-        defer self.allocator.free(response);
+        std.log.info("Sending handshake response ({} bytes)", .{response.len});
 
         _ = try self.connection.stream.write(response);
+        std.log.info("Handshake response sent successfully", .{});
     }
 
     pub fn readFrame(self: *Client, buffer: []u8) !protocol.Frame {

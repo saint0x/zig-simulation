@@ -107,31 +107,9 @@ pub const CommandMessage = struct {
 };
 
 pub const ConnectionStatusMessage = struct {
-    status: u8,  // Uses CONNECTION_STATUS_* constants
+    status: []const u8,  // Use string directly instead of constants
     message: ?[]const u8,
     timestamp_us: u64,
-
-    pub fn jsonStringify(self: ConnectionStatusMessage, writer: anytype) !void {
-        _ = try writer.write("{\"status\":");
-        const status_str = switch (self.status) {
-            CONNECTION_STATUS_CONNECTED => "\"connected\"",
-            CONNECTION_STATUS_DISCONNECTED => "\"disconnected\"",
-            CONNECTION_STATUS_ERROR => "\"error\"",
-            else => "\"unknown\"",
-        };
-        _ = try writer.write(status_str);
-        _ = try writer.write(",\"message\":");
-        if (self.message) |msg| {
-            _ = try writer.write("\"");
-            _ = try writer.write(msg); // Assuming msg doesn't need further JSON escaping for this context
-            _ = try writer.write("\"");
-        } else {
-            _ = try writer.write("null");
-        }
-        _ = try writer.write(",\"timestamp_us\":");
-        try writer.print("{}", .{self.timestamp_us}); // Use print for basic number formatting
-        _ = try writer.write("}");
-    }
 };
 
 // WebSocket frame handling
@@ -175,6 +153,117 @@ pub const Frame = struct {
             .type = msg_type,
             .payload = payload,
         };
+    }
+};
+
+// WebSocket frame implementation (RFC 6455)
+pub const WebSocketFrame = struct {
+    fin: bool,
+    opcode: u4,
+    masked: bool,
+    payload: []const u8,
+    
+    pub const OPCODE_TEXT = 0x1;
+    pub const OPCODE_BINARY = 0x2;
+    pub const OPCODE_CLOSE = 0x8;
+    pub const OPCODE_PING = 0x9;
+    pub const OPCODE_PONG = 0xA;
+    
+    pub fn encodeText(data: []const u8, writer: anytype) !void {
+        return encode(data, OPCODE_TEXT, writer);
+    }
+    
+    pub fn encodeBinary(data: []const u8, writer: anytype) !void {
+        return encode(data, OPCODE_BINARY, writer);
+    }
+    
+    pub fn encodePong(data: []const u8, writer: anytype) !void {
+        return encode(data, OPCODE_PONG, writer);
+    }
+    
+    fn encode(data: []const u8, opcode: u4, writer: anytype) !void {
+        // First byte: FIN=1, RSV=000, OPCODE
+        const first_byte: u8 = 0x80 | @as(u8, opcode); // FIN=1, RSV=000
+        try writer.writeByte(first_byte);
+        
+        const payload_len = data.len;
+        
+        if (payload_len < 126) {
+            // Small payload: length fits in 7 bits
+            try writer.writeByte(@truncate(payload_len));
+        } else if (payload_len < 65536) {
+            // Medium payload: use 16-bit length
+            try writer.writeByte(126);
+            try writer.writeInt(u16, @truncate(payload_len), .big);
+        } else {
+            // Large payload: use 64-bit length
+            try writer.writeByte(127);
+            try writer.writeInt(u64, payload_len, .big);
+        }
+        
+        // Payload (server doesn't mask data)
+        try writer.writeAll(data);
+    }
+    
+    pub fn decode(reader: anytype, buffer: []u8) !WebSocketFrame {
+        // Read first byte
+        const first_byte = try reader.readByte();
+        const fin = (first_byte & 0x80) != 0;
+        const opcode: u4 = @truncate(first_byte & 0x0F);
+        
+        // Read second byte
+        const second_byte = try reader.readByte();
+        const masked = (second_byte & 0x80) != 0;
+        var payload_len: u64 = second_byte & 0x7F;
+        
+        // Extended payload length
+        if (payload_len == 126) {
+            payload_len = try reader.readInt(u16, .big);
+        } else if (payload_len == 127) {
+            payload_len = try reader.readInt(u64, .big);
+        }
+        
+        // Masking key (if present)
+        var mask: [4]u8 = undefined;
+        if (masked) {
+            try reader.readNoEof(&mask);
+        }
+        
+        // Read payload
+        if (payload_len > buffer.len) {
+            return error.PayloadTooLarge;
+        }
+        
+        const payload = buffer[0..payload_len];
+        try reader.readNoEof(payload);
+        
+        // Unmask payload if needed
+        if (masked) {
+            for (payload, 0..) |*byte, i| {
+                byte.* ^= mask[i % 4];
+            }
+        }
+        
+        return WebSocketFrame{
+            .fin = fin,
+            .opcode = opcode,
+            .masked = masked,
+            .payload = payload,
+        };
+    }
+};
+
+// Simplified Message Encoder for Production WebSocket Protocol
+// WebSocket is just transport - send direct message content
+pub const MessageEncoder = struct {
+    /// Send binary data (joint states) as WebSocket binary frame
+    pub fn sendBinaryMessage(data: []const u8, writer: anytype) !void {
+        try WebSocketFrame.encodeBinary(data, writer);
+    }
+    
+    /// Send JSON data (status, collision, etc.) as WebSocket text frame
+    pub fn sendJsonMessage(json_string: []const u8, writer: anytype) !void {
+        try WebSocketFrame.encodeText(json_string, writer);
     }
 };
 

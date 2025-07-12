@@ -46,7 +46,7 @@ export function ControlPanel({ angles, onAngleChange, onMovementSelect, controlS
                     <span className="text-sm font-mono">{angles.baseRotation.toFixed(0)}°</span>
                   </div>
                   <Slider
-                    value={[angles.baseRotation]}
+                    value={[angles?.baseRotation ?? 0]}
                     min={-180}
                     max={180}
                     step={1}

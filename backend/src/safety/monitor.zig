@@ -16,6 +16,10 @@ pub const SafetyMonitor = struct {
         collision_detector: *kinematics.collision_detection.CollisionDetection,
         emergency_stop_threshold: f32,
     ) SafetyMonitor {
+        std.log.info("SafetyMonitor initialized with limits:", .{});
+        for (joint_limits.*, 0..) |limit, i| {
+            std.log.info("  Joint {}: velocity limit = {d:.1}°/s", .{i, limit.max_velocity});
+        }
         return SafetyMonitor{
             .joint_limits = joint_limits,
             .collision_detector = collision_detector,
@@ -55,10 +59,13 @@ pub const SafetyMonitor = struct {
         for (joint_states, 0..) |state, i| {
             const limit = self.joint_limits.*[i];
             if (state.current_angle < limit.min_angle or state.current_angle > limit.max_angle) {
+                std.log.err("Joint {} angle limit exceeded: {} not in [{}, {}]", .{i, state.current_angle, limit.min_angle, limit.max_angle});
                 return false;
             }
             // Check velocity limits 
-            if (@abs(state.current_velocity) > limit.max_velocity) {
+            const abs_velocity = @abs(state.current_velocity);
+            if (abs_velocity > limit.max_velocity) {
+                std.log.err("Joint {} velocity limit exceeded: {d:.2}°/s > {d:.2}°/s (limit)", .{i, abs_velocity, limit.max_velocity});
                 return false;
             }
         }
