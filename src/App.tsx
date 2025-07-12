@@ -1,6 +1,7 @@
 import RobotArmSimulation from "@/components/robot-arm-simulation"
 
-export default function Home() {
+function App() {
   return <RobotArmSimulation />
 }
 
+export default App

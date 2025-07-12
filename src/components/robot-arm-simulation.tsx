@@ -1,5 +1,3 @@
-"use client"
-
 import { useState, useEffect, Suspense } from "react"
 import { Canvas } from "@react-three/fiber"
 import { OrbitControls, Environment, PerspectiveCamera, ContactShadows, Text } from "@react-three/drei"
