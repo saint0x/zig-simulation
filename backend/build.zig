@@ -88,6 +88,9 @@ pub fn build(b: *std.Build) void {
     });
     physics.addImport("core", core);
     physics.addImport("utils", utils);
+    
+    // Add physics dependency to joints now that physics module is created
+    joints.addImport("physics", physics);
 
     // Create the communication module
     const communication = b.addModule("communication", .{
@@ -150,4 +153,68 @@ pub fn build(b: *std.Build) void {
 
     const run_step = b.step("run", "Run the backend");
     run_step.dependOn(&run_cmd.step);
+
+    // Create test targets
+    const test_step = b.step("test", "Run all tests");
+    
+    // Physics tests
+    const physics_tests = b.addTest(.{
+        .name = "physics_tests",
+        .root_source_file = b.path("tests/physics/simulation_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    physics_tests.root_module.addImport("core", core);
+    physics_tests.root_module.addImport("utils", utils);
+    physics_tests.root_module.addImport("physics", physics);
+    
+    const run_physics_tests = b.addRunArtifact(physics_tests);
+    test_step.dependOn(&run_physics_tests.step);
+    
+    // Protocol tests
+    const protocol_tests = b.addTest(.{
+        .name = "protocol_tests", 
+        .root_source_file = b.path("tests/communication/protocol_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    protocol_tests.root_module.addImport("core", core);
+    protocol_tests.root_module.addImport("communication", communication);
+    
+    const run_protocol_tests = b.addRunArtifact(protocol_tests);
+    test_step.dependOn(&run_protocol_tests.step);
+    
+    // Safety tests
+    const safety_tests = b.addTest(.{
+        .name = "safety_tests",
+        .root_source_file = b.path("tests/safety/safety_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    safety_tests.root_module.addImport("core", core);
+    safety_tests.root_module.addImport("safety", safety);
+    safety_tests.root_module.addImport("utils", utils);
+    safety_tests.root_module.addImport("kinematics", kinematics);
+    
+    const run_safety_tests = b.addRunArtifact(safety_tests);
+    test_step.dependOn(&run_safety_tests.step);
+    
+    // Integration tests
+    const integration_tests = b.addTest(.{
+        .name = "integration_tests",
+        .root_source_file = b.path("tests/integration/full_system_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    integration_tests.root_module.addImport("core", core);
+    integration_tests.root_module.addImport("joints", joints);
+    integration_tests.root_module.addImport("physics", physics);
+    integration_tests.root_module.addImport("communication", communication);
+    integration_tests.root_module.addImport("safety", safety);
+    integration_tests.root_module.addImport("timing", timing);
+    integration_tests.root_module.addImport("kinematics", kinematics);
+    integration_tests.root_module.addImport("utils", utils);
+    
+    const run_integration_tests = b.addRunArtifact(integration_tests);
+    test_step.dependOn(&run_integration_tests.step);
 }

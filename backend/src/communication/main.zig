@@ -41,6 +41,11 @@ const UpdateThread = struct {
         self.thread.join();
         self.command_queue.deinit();
     }
+    
+    pub fn deinit(self: *UpdateThread) void {
+        self.stop();
+        self.allocator.destroy(self);
+    }
 
     fn run(self: *UpdateThread) !void {
         var timer = try time.Timer.start();
@@ -332,9 +337,9 @@ pub const WebSocketServer = struct {
 
     pub fn stop(self: *WebSocketServer) void {
         self.running = false;
-        self.server.close();
+        // Note: Server doesn't have close() method in this Zig version
         self.thread.join();
-        self.update_thread.stop();
+        self.update_thread.deinit(); // Properly cleanup UpdateThread
         
         for (self.clients.items) |client| {
             client.deinit();

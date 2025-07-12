@@ -1,5 +1,6 @@
 const std = @import("std");
 const types = @import("types.zig");
+const core = @import("core");
 
 pub const PhysicsSimulation = struct {
     // Joint dynamics
@@ -24,16 +25,17 @@ pub const PhysicsSimulation = struct {
     temperature_sensors: [types.NUM_JOINTS]types.TemperatureSensorSimulation,
 
     pub fn init() PhysicsSimulation {
-        // Parameters based on typical KUKA KR6 R900 robot
+        // Parameters based on typical KUKA KR6 R900 robot (7 joints)
         const sim = PhysicsSimulation{
             // Inertia increases for joints further from base
-            .inertia = [_]f32{ 2.5, 2.0, 1.5, 0.8, 0.4, 0.2 },
+            .inertia = [_]f32{ 2.5, 2.0, 1.5, 0.8, 0.4, 0.2, 0.1 },
             // Damping coefficients for smooth motion
-            .damping = [_]f32{ 0.8, 0.7, 0.6, 0.4, 0.3, 0.2 },
+            .damping = [_]f32{ 0.8, 0.7, 0.6, 0.4, 0.3, 0.2, 0.1 },
             // Static + dynamic friction
-            .friction = [_]f32{ 0.15, 0.12, 0.1, 0.08, 0.05, 0.03 },
+            .friction = [_]f32{ 0.15, 0.12, 0.1, 0.08, 0.05, 0.03, 0.02 },
             // Gravity compensation (more effect on middle joints)
-            .gravity_compensation = [_]f32{ 0.0, 9.81, 4.905, 2.45, 0.0, 0.0 },
+            .gravity_compensation = [_]f32{ 0.0, 9.81, 4.905, 2.45, 0.0, 0.0, 0.0 },
+            // Initialize to safe mid-range positions (0 degrees)
             .position = [_]f32{0.0} ** types.NUM_JOINTS,
             .velocity = [_]f32{0.0} ** types.NUM_JOINTS,
             .acceleration = [_]f32{0.0} ** types.NUM_JOINTS,
@@ -95,7 +97,7 @@ pub const PhysicsSimulation = struct {
             const friction_torque = if (self.velocity[i] == 0.0)
                 std.math.clamp(motor_torque, -coulomb_friction, coulomb_friction)
             else
-                -std.math.sign(self.velocity[i]) * (coulomb_friction + std.math.fabs(viscous_friction));
+                -std.math.sign(self.velocity[i]) * (coulomb_friction + @abs(viscous_friction));
 
             // Position-dependent gravity compensation
             const gravity_torque = self.gravity_compensation[i] * 
@@ -135,16 +137,14 @@ pub const PhysicsSimulation = struct {
         }
     }
 
-    pub fn readSensors(self: *PhysicsSimulation) struct {
+    const SensorReadings = struct {
         positions: [types.NUM_JOINTS]f32,
         currents: [types.NUM_JOINTS]f32,
         temperatures: [types.NUM_JOINTS]f32,
-    } {
-        var readings = .{
-            .positions = undefined,
-            .currents = undefined,
-            .temperatures = undefined,
-        };
+    };
+    
+    pub fn readSensors(self: *PhysicsSimulation) SensorReadings {
+        var readings: SensorReadings = undefined;
 
         for (0..types.NUM_JOINTS) |i| {
             readings.positions[i] = self.position_sensors[i].readPosition(self.position[i]);

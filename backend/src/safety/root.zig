@@ -21,6 +21,9 @@ pub const checks = @import("checks.zig");
 pub const SafetyCheck = checks.SafetyCheck;
 pub const SafetyStatus = checks.SafetyStatus;
 
+// Safety types
+pub const types = @import("types.zig");
+
 const kinematics = @import("kinematics");
 
 const NUM_JOINTS = core.types.NUM_JOINTS;

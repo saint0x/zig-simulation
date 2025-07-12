@@ -112,25 +112,25 @@ pub const ConnectionStatusMessage = struct {
     timestamp_us: u64,
 
     pub fn jsonStringify(self: ConnectionStatusMessage, writer: anytype) !void {
-        try writer.write("{\"status\":");
+        _ = try writer.write("{\"status\":");
         const status_str = switch (self.status) {
             CONNECTION_STATUS_CONNECTED => "\"connected\"",
             CONNECTION_STATUS_DISCONNECTED => "\"disconnected\"",
             CONNECTION_STATUS_ERROR => "\"error\"",
             else => "\"unknown\"",
         };
-        try writer.write(status_str);
-        try writer.write(",\"message\":");
+        _ = try writer.write(status_str);
+        _ = try writer.write(",\"message\":");
         if (self.message) |msg| {
-            try writer.write("\"");
-            try writer.write(msg); // Assuming msg doesn't need further JSON escaping for this context
-            try writer.write("\"");
+            _ = try writer.write("\"");
+            _ = try writer.write(msg); // Assuming msg doesn't need further JSON escaping for this context
+            _ = try writer.write("\"");
         } else {
-            try writer.write("null");
+            _ = try writer.write("null");
         }
-        try writer.write(",\"timestamp_us\":");
+        _ = try writer.write(",\"timestamp_us\":");
         try writer.print("{}", .{self.timestamp_us}); // Use print for basic number formatting
-        try writer.write("}");
+        _ = try writer.write("}");
     }
 };
 

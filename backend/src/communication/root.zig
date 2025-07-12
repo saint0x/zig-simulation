@@ -5,6 +5,7 @@ const std = @import("std");
 pub usingnamespace @import("main.zig");
 
 pub const Communication = @import("main.zig").Communication;
+pub const protocol = @import("protocol.zig");
 
 pub fn init(allocator: std.mem.Allocator) !*Communication {
     const comm = try allocator.create(Communication);

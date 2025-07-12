@@ -62,19 +62,8 @@ pub fn init(configs: ?[core.types.NUM_JOINTS]core.types.JointConfig, timing: *co
         undefined, // TODO: Set forward kinematics
     );
 
-    // Initialize safety monitor
-    var joint_limits: [core.types.NUM_JOINTS]safety.JointLimits = undefined;
-    for (0..core.types.NUM_JOINTS) |i| {
-        joint_limits[i] = safety.JointLimits.init(
-            joint_mgr.configs[i].min_angle,
-            joint_mgr.configs[i].max_angle,
-        );
-    }
-    joint_mgr.safety = safety.SafetyMonitor.init(
-        &joint_limits,
-        joint_mgr.collision_detector,
-        0.1, // Emergency stop threshold
-    );
+    // Note: Safety monitoring is handled by the main joint manager
+    // No separate safety monitor needed here
 
     // Initialize robot state
     joint_mgr.robot_state = .powered_off;

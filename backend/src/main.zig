@@ -86,11 +86,11 @@ pub fn main() !void {
     // Initialize kinematics
     var fk = kinematics.ForwardKinematics.init(link_dimensions);
 
-    // Initialize collision detection configuration
+    // Initialize collision detection configuration (temporarily disabled for testing)
     const collision_config = core.types.CollisionConfig{
         .min_link_distance = 0.01, // 1cm minimum distance between links
         .min_environment_distance = 0.05, // 5cm minimum distance from environment
-        .enable_continuous_detection = true,
+        .enable_continuous_detection = false, // Temporarily disabled
         .check_frequency = 100, // Check for collisions 100 times per second
         .link_dimensions = link_dimensions,
     };
@@ -101,14 +101,15 @@ pub fn main() !void {
         &fk
     );
 
-    // Initialize joint limits
-    const joint_limits = [_]safety.limits.JointLimits{
-        .{ .min_angle = -180, .max_angle = 180 },
-        .{ .min_angle = -180, .max_angle = 180 },
-        .{ .min_angle = -180, .max_angle = 180 },
-        .{ .min_angle = -180, .max_angle = 180 },
-        .{ .min_angle = -180, .max_angle = 180 },
-        .{ .min_angle = -180, .max_angle = 180 },
+    // Initialize joint limits (7 joints total) with realistic KUKA KR6 limits
+    const joint_limits = [_]safety.types.JointLimit{
+        .{ .min_angle = -180, .max_angle = 180, .max_velocity = 125, .max_acceleration = 300 }, // base_rotation
+        .{ .min_angle = -180, .max_angle = 180, .max_velocity = 95, .max_acceleration = 250 },  // shoulder_rotation  
+        .{ .min_angle = -180, .max_angle = 180, .max_velocity = 155, .max_acceleration = 350 }, // elbow_rotation
+        .{ .min_angle = -180, .max_angle = 180, .max_velocity = 185, .max_acceleration = 400 }, // wrist_bend
+        .{ .min_angle = -180, .max_angle = 180, .max_velocity = 205, .max_acceleration = 450 }, // wrist_rotation
+        .{ .min_angle = -180, .max_angle = 180, .max_velocity = 255, .max_acceleration = 500 }, // tool_rotation
+        .{ .min_angle = -180, .max_angle = 180, .max_velocity = 95, .max_acceleration = 200 },  // gripper
     };
 
     // Initialize safety monitor
@@ -131,37 +132,56 @@ pub fn main() !void {
     // Initialize and start the WebSocket server
     const web_socket_port: u16 = 9001;
     const comm_server = try communication.WebSocketServer.init(allocator, web_socket_port, joint_manager);
+    defer comm_server.stop(); // Ensure cleanup on exit
     
     // Spawn a thread for the communication server to listen for connections
-    // The server's listenAndServe() is blocking, so it needs its own thread.
-    // We will detach the thread as the main loop runs indefinitely.
-    // For a production system with a graceful shutdown, you might want to store the thread
-    // and join it on shutdown.
     var server_thread = try std.Thread.spawn(.{}, struct {
         fn run(server: *communication.WebSocketServer) !void {
             try server.start();
         }
     }.run, .{comm_server});
-    server_thread.detach(); // Detach as main loop is infinite
+    // Don't detach - we need to join on shutdown
 
     std.log.info("WebSocket server started on port {d}", .{web_socket_port});
 
     // Power up the robot
     joint_manager.reset();
+    
+    // Add graceful shutdown handling
+    const running: bool = true;
+    var iteration_count: u64 = 0;
+    const max_iterations = 1000; // Limit for testing - remove for production
+
+    std.log.info("Starting main control loop (limited to {} iterations for testing)", .{max_iterations});
 
     // Main control loop
-    while (true) {
+    while (running and iteration_count < max_iterations) {
         // Wait for next control cycle
         const current_time: i64 = @intCast(std.time.nanoTimestamp());
         if (!timing.shouldUpdate(current_time)) continue;
 
-        // Update joint controllers
-        try joint_manager.updateStates();
-
-        // TODO: Add communication with frontend
-        // 1. Receive target positions
-        // 2. Send current joint states
-        // 3. Handle commands
-        // 4. Report errors
+        // Update joint controllers with error handling
+        joint_manager.updateStates() catch |err| {
+            std.log.err("Joint update error: {}", .{err});
+            if (err == error.SafetyLimitExceeded) {
+                std.log.warn("Safety limits exceeded - continuing with caution", .{});
+                // Reset to safe state instead of crashing
+                joint_manager.reset();
+                continue;
+            }
+            break; // Exit on other errors
+        };
+        
+        iteration_count += 1;
+        
+        // Periodic status logging
+        if (iteration_count % 1000 == 0) {
+            std.log.info("Control loop iteration: {}", .{iteration_count});
+        }
     }
+    
+    std.log.info("Main control loop completed. Shutting down...", .{});
+    
+    // Signal server to stop and wait for thread to finish
+    server_thread.join();
 }

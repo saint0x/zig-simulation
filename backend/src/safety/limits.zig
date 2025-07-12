@@ -10,6 +10,10 @@ pub const JointLimits = struct {
             .max_angle = max,
         };
     }
+    
+    pub fn isWithinLimits(self: JointLimits, angle: f32) bool {
+        return angle >= self.min_angle and angle <= self.max_angle;
+    }
 };
 
 pub const VelocityLimits = struct {

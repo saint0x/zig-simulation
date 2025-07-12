@@ -4,6 +4,7 @@ const timing = @import("timing");
 const safety = @import("safety");
 const kinematics = @import("kinematics");
 const pid = @import("control").pid;
+const physics = @import("physics");
 
 pub const JointManager = struct {
     allocator: std.mem.Allocator,
@@ -15,6 +16,8 @@ pub const JointManager = struct {
     collision_detector: *kinematics.collision_detection.CollisionDetection,
     fk: *kinematics.ForwardKinematics,
     control_mode: types.ControlMode,
+    physics_simulation: physics.simulation.PhysicsSimulation,
+    startup_counter: u32,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -34,6 +37,8 @@ pub const JointManager = struct {
             .collision_detector = collision_detector,
             .fk = fk,
             .control_mode = types.ControlMode.position,
+            .physics_simulation = physics.simulation.PhysicsSimulation.init(),
+            .startup_counter = 0,
         };
 
         // Initialize joints with default configs
@@ -98,17 +103,77 @@ pub const JointManager = struct {
     }
 
     pub fn updateStates(self: *JointManager) !void {
+        const dt = 0.001; // 1kHz update rate (1ms)
+        self.startup_counter += 1;
+        
+        // Calculate control voltages for each joint based on current control mode
+        var voltages: [types.NUM_JOINTS]f32 = undefined;
+        
         for (&self.joints, 0..) |*joint, i| {
             const controller = &self.controllers[i];
             
-            // Update joint state based on controller output
-            joint.current_velocity = controller.update();
-            joint.current_angle += joint.current_velocity * (1.0 / 1000.0); // 1kHz update rate
+            switch (self.control_mode) {
+                .position => {
+                    // PID position control - output is velocity command
+                    const velocity_cmd = controller.update();
+                    joint.target_velocity = velocity_cmd;
+                    
+                    // Convert velocity command to motor voltage
+                    // Simplified model: voltage proportional to desired velocity
+                    voltages[i] = velocity_cmd * 2.0; // Scale factor for voltage
+                },
+                .velocity => {
+                    // Direct velocity control
+                    voltages[i] = joint.target_velocity * 2.0;
+                },
+                .torque => {
+                    // Convert torque command to voltage using motor constants
+                    const motor_kt = self.physics_simulation.motor_constants[i].kt;
+                    const desired_current = joint.target_torque / motor_kt;
+                    voltages[i] = desired_current * self.physics_simulation.motor_constants[i].resistance;
+                },
+            }
             
-            // Check safety limits
-            if (!self.safety_monitor.checkSafety(&[_]types.JointState{joint.*})) {
+            // Limit voltage to reasonable range
+            voltages[i] = std.math.clamp(voltages[i], -24.0, 24.0); // ±24V typical
+        }
+        
+        // Step the physics simulation with calculated voltages
+        self.physics_simulation.step(voltages, dt);
+        
+        // Read sensor values from physics simulation
+        const sensor_readings = self.physics_simulation.readSensors();
+        
+        // Update joint states with physics simulation results
+        for (&self.joints, 0..) |*joint, i| {
+            // Convert from radians to degrees for consistency with existing code
+            joint.current_angle = sensor_readings.positions[i] * 180.0 / std.math.pi;
+            joint.current_velocity = self.physics_simulation.velocity[i] * 180.0 / std.math.pi;
+            joint.current_torque = self.physics_simulation.motor_constants[i].kt * 
+                                  self.physics_simulation.electrical_model[i].current;
+            joint.temperature = sensor_readings.temperatures[i];
+            joint.current = sensor_readings.currents[i];
+            
+            // Update controllers with new position feedback (convert back to radians)
+            const position_rad = sensor_readings.positions[i];
+            self.controllers[i].state.current_angle = position_rad * 180.0 / std.math.pi;
+            self.controllers[i].state.current_velocity = self.physics_simulation.velocity[i] * 180.0 / std.math.pi;
+        }
+        
+        // Skip safety checks during startup (first 100 iterations = 100ms)
+        if (self.startup_counter > 100) {
+            // Check safety limits with updated states
+            if (!self.safety_monitor.checkSafety(&self.joints)) {
+                // Log current joint states for debugging
+                std.log.err("Safety limit exceeded! Joint states:", .{});
+                for (self.joints, 0..) |joint, i| {
+                    std.log.err("  Joint {}: angle={d:.2}°, velocity={d:.2}°/s", .{ i, joint.current_angle, joint.current_velocity });
+                }
                 return error.SafetyLimitExceeded;
             }
+        } else if (self.startup_counter % 50 == 0) {
+            // Log startup progress
+            std.log.info("Startup progress: {}/100 iterations", .{self.startup_counter});
         }
     }
 
@@ -140,6 +205,13 @@ pub const JointManager = struct {
                 .last_error = 0,
             };
         }
+        
+        // Reset physics simulation to initial state
+        self.physics_simulation = physics.simulation.PhysicsSimulation.init();
+        
+        // Reset startup counter
+        self.startup_counter = 0;
+        
         self.control_mode = types.ControlMode.position;
     }
 

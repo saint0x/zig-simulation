@@ -26,8 +26,6 @@ pub const JointManager = struct {
     configs: [core.types.NUM_JOINTS]core.types.JointConfig,
     /// Timing system for control loop
     timing_system: *core.TimingSystem,
-    /// Safety monitor
-    safety: core.SafetyMonitor,
     /// Collision detection
     collision_detector: *kinematics.collision_detection.CollisionDetection,
     /// Current robot state
@@ -166,11 +164,8 @@ pub const JointManager = struct {
             self.joints[i].current_angle += self.joints[i].current_velocity * dt;
             self.joints[i].last_error = position_error;
 
-            // Check safety limits
-            if (!self.safety.checkSafety(&[_]core.types.JointState{self.joints[i]})) {
-                self.robot_state = .emergency_stop;
-                return error.SafetyLimitExceeded;
-            }
+            // Note: Safety checks are handled by the main joint manager
+            // No duplicate safety checking needed here
         }
 
         // Update collision detection

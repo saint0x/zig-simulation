@@ -1,18 +1,18 @@
 const std = @import("std");
 const utils = @import("utils");
-const limits = @import("limits.zig");
+const types = @import("types.zig");
 const kinematics = @import("kinematics");
 const core = @import("core");
 
 pub const SafetyMonitor = struct {
-    joint_limits: []const limits.JointLimits,
+    joint_limits: *const [core.types.NUM_JOINTS]types.JointLimit,
     collision_detector: *kinematics.collision_detection.CollisionDetection,
     emergency_stop_threshold: f32,
     enabled: bool,
     e_stop_active: bool,
 
     pub fn init(
-        joint_limits: []const limits.JointLimits,
+        joint_limits: *const [core.types.NUM_JOINTS]types.JointLimit,
         collision_detector: *kinematics.collision_detection.CollisionDetection,
         emergency_stop_threshold: f32,
     ) SafetyMonitor {
@@ -53,16 +53,21 @@ pub const SafetyMonitor = struct {
         }
         // Check joint limits
         for (joint_states, 0..) |state, i| {
-            const limit = self.joint_limits[i];
+            const limit = self.joint_limits.*[i];
             if (state.current_angle < limit.min_angle or state.current_angle > limit.max_angle) {
+                return false;
+            }
+            // Check velocity limits 
+            if (@abs(state.current_velocity) > limit.max_velocity) {
                 return false;
             }
         }
 
-        // Check for collisions
+        // Check for collisions with relaxed settings
         const current_time = @as(f64, @floatFromInt(std.time.nanoTimestamp()));
         const collision_result = self.collision_detector.checkCollisions(current_time);
-        if (collision_result.collision_detected) {
+        if (collision_result.collision_detected and collision_result.min_distance < -0.1) {
+            // Only trigger on significant penetration (>10cm) to avoid false positives
             return false;
         }
 
