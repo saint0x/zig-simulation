@@ -1,4 +1,4 @@
-import { useState, useEffect, Suspense } from "react"
+import { useState, useEffect, useCallback, Suspense } from "react"
 import { Canvas } from "@react-three/fiber"
 import { OrbitControls, Environment, PerspectiveCamera, ContactShadows, Text } from "@react-three/drei"
 import { RobotArm } from "./robot-arm"
@@ -6,6 +6,9 @@ import { ControlPanel } from "./control-panel"
 import { Physics, useBox, usePlane, useSphere } from "@react-three/cannon"
 import { InfoPanel } from "./info-panel"
 import { ZigController } from "./zig-controller"
+import { HandTrackingPanel } from "./mediapipe/hand-tracking-panel"
+import type { JointAngles, DiscreteCommand, InputSource } from "@/types/mediapipe"
+import { jointAnglesToArray } from "@/lib/mediapipe/mapping"
 
 export default function RobotArmSimulation() {
   const [armAngles, setArmAngles] = useState({
@@ -23,7 +26,11 @@ export default function RobotArmSimulation() {
     sensorReadings: [0, 0, 0, 0, 0, 0, 0],
     systemStatus: "READY",
     errorCode: null,
+    sendJointCommand: null as ((positions: number[], maxVelocity?: number[]) => void) | null,
   })
+
+  const [inputSource, setInputSource] = useState<InputSource>('manual')
+  const [eStopActive, setEStopActive] = useState(false)
 
   // Predefined movements
   const movements = {
@@ -74,35 +81,98 @@ export default function RobotArmSimulation() {
     },
   }
 
-  // Simulate Zig controller communication
-  useEffect(() => {
-    const interval = setInterval(() => {
-      // Simulate motor current based on joint movement
-      const newMotorCurrents = Object.values(armAngles).map((angle) => Math.abs(angle) * 0.1 + Math.random() * 0.5)
+  // Handle manual angle changes
+  const handleAngleChange = useCallback((joint: string, value: number) => {
+    if (eStopActive) return
 
-      // Simulate sensor readings
-      const newSensorReadings = newMotorCurrents.map((current) => current + (Math.random() - 0.5) * 0.2)
-
-      setControlSignals({
-        motorCurrents: newMotorCurrents,
-        sensorReadings: newSensorReadings,
-        systemStatus: Math.random() > 0.98 ? "WARNING" : "READY",
-        errorCode: Math.random() > 0.98 ? "TEMP_HIGH" : null,
-      })
-    }, 500)
-
-    return () => clearInterval(interval)
-  }, [armAngles])
-
-  const handleAngleChange = (joint, value) => {
     setArmAngles((prev) => ({ ...prev, [joint]: value }))
-  }
+    setInputSource('manual')
 
-  const executeMovement = (movementName) => {
-    if (movements[movementName]) {
-      setArmAngles(movements[movementName])
+    // Send to backend if available
+    if (controlSignals.sendJointCommand) {
+      const newAngles = { ...armAngles, [joint]: value }
+      const positionArray = [
+        newAngles.baseRotation,
+        newAngles.shoulderRotation,
+        newAngles.elbowRotation,
+        newAngles.wristBendRotation,
+        newAngles.wristRotation,
+        newAngles.toolRotation,
+        newAngles.gripperRotation,
+      ]
+      controlSignals.sendJointCommand(positionArray)
     }
-  }
+  }, [armAngles, controlSignals.sendJointCommand, eStopActive])
+
+  // Handle preset movement execution
+  const executeMovement = useCallback((movementName: string) => {
+    if (eStopActive) return
+
+    const movement = movements[movementName as keyof typeof movements]
+    if (movement) {
+      setArmAngles(movement)
+      setInputSource('preset')
+
+      // Send to backend
+      if (controlSignals.sendJointCommand) {
+        const positionArray = jointAnglesToArray(movement as JointAngles)
+        controlSignals.sendJointCommand(positionArray)
+      }
+    }
+  }, [controlSignals.sendJointCommand, eStopActive])
+
+  // Handle hand tracking joint angles
+  const handleHandTrackingAngles = useCallback((angles: JointAngles) => {
+    if (eStopActive) return
+
+    setArmAngles(angles)
+    setInputSource('mediapipe')
+
+    // Send to backend
+    if (controlSignals.sendJointCommand) {
+      const positionArray = jointAnglesToArray(angles)
+      controlSignals.sendJointCommand(positionArray)
+    }
+  }, [controlSignals.sendJointCommand, eStopActive])
+
+  // Handle discrete commands from gestures
+  const handleDiscreteCommand = useCallback((command: DiscreteCommand) => {
+    console.log('Discrete command received:', command)
+
+    switch (command.type) {
+      case 'GRIPPER':
+        const gripperValue = command.value === 'close' ? -90 : 0
+        setArmAngles(prev => ({ ...prev, gripperRotation: gripperValue }))
+        if (controlSignals.sendJointCommand) {
+          const positionArray = jointAnglesToArray({ ...armAngles, gripperRotation: gripperValue })
+          controlSignals.sendJointCommand(positionArray)
+        }
+        break
+
+      case 'E_STOP':
+        handleEStop()
+        break
+
+      case 'MODE':
+        // Toggle between manual and mediapipe
+        setInputSource(prev => prev === 'mediapipe' ? 'manual' : 'mediapipe')
+        break
+    }
+  }, [armAngles, controlSignals.sendJointCommand])
+
+  // Handle emergency stop
+  const handleEStop = useCallback(() => {
+    console.log('EMERGENCY STOP ACTIVATED')
+    setEStopActive(true)
+    setControlSignals(prev => ({ ...prev, systemStatus: 'E_STOP' }))
+
+    // Reset E-stop after 3 seconds (in production this would require manual reset)
+    setTimeout(() => {
+      setEStopActive(false)
+      setControlSignals(prev => ({ ...prev, systemStatus: 'READY' }))
+      console.log('E-STOP reset')
+    }, 3000)
+  }, [])
 
   return (
     <div className="relative w-full h-screen bg-gradient-to-b from-gray-900 to-gray-800">
@@ -174,6 +244,7 @@ export default function RobotArmSimulation() {
         <OrbitControls enableDamping dampingFactor={0.05} />
       </Canvas>
 
+      {/* Control Panel - Manual controls */}
       <ControlPanel
         angles={armAngles}
         onAngleChange={handleAngleChange}
@@ -181,9 +252,36 @@ export default function RobotArmSimulation() {
         controlSignals={controlSignals}
       />
 
+      {/* Info Panel */}
       <InfoPanel />
 
+      {/* Backend Connection */}
       <ZigController controlSignals={controlSignals} setControlSignals={setControlSignals} />
+
+      {/* Hand Tracking Panel */}
+      <HandTrackingPanel
+        onJointAnglesChange={handleHandTrackingAngles}
+        onDiscreteCommand={handleDiscreteCommand}
+        onEStop={handleEStop}
+        className="absolute top-4 right-4 w-[350px]"
+      />
+
+      {/* Input Source Indicator */}
+      <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-black/70 px-4 py-2 rounded-full">
+        <span className="text-gray-400 text-sm">Input: </span>
+        <span className={`text-sm font-medium ${
+          inputSource === 'mediapipe' ? 'text-orange-400' :
+          inputSource === 'preset' ? 'text-blue-400' :
+          'text-green-400'
+        }`}>
+          {inputSource === 'mediapipe' ? 'Hand Tracking' :
+           inputSource === 'preset' ? 'Preset' :
+           'Manual'}
+        </span>
+        {eStopActive && (
+          <span className="ml-2 text-red-500 font-bold animate-pulse">E-STOP</span>
+        )}
+      </div>
     </div>
   )
 }
@@ -245,8 +343,8 @@ function InteractiveObjects() {
   )
 }
 
-function Box({ position, color, size = [0.5, 0.5, 0.5] }) {
-  const [ref, api] = useBox(() => ({
+function Box({ position, color, size = [0.5, 0.5, 0.5] }: { position: [number, number, number], color: string, size?: [number, number, number] }) {
+  const [ref] = useBox(() => ({
     mass: 1,
     position,
     args: size,
@@ -260,8 +358,8 @@ function Box({ position, color, size = [0.5, 0.5, 0.5] }) {
   )
 }
 
-function Sphere({ position, color, radius = 0.5 }) {
-  const [ref, api] = useSphere(() => ({
+function Sphere({ position, color, radius = 0.5 }: { position: [number, number, number], color: string, radius?: number }) {
+  const [ref] = useSphere(() => ({
     mass: 1,
     position,
     args: [radius],
@@ -275,8 +373,8 @@ function Sphere({ position, color, radius = 0.5 }) {
   )
 }
 
-function Cylinder({ position, color }) {
-  const [ref, api] = useBox(() => ({
+function Cylinder({ position, color }: { position: [number, number, number], color: string }) {
+  const [ref] = useBox(() => ({
     mass: 1,
     position,
     args: [0.2, 0.3, 0.2],
@@ -289,4 +387,3 @@ function Cylinder({ position, color }) {
     </mesh>
   )
 }
-
