@@ -20,16 +20,40 @@ const COMMAND_TYPE_VELOCITY = 1
 const COMMAND_TYPE_TORQUE = 2
 const COMMAND_TYPE_SAFETY = 4
 
-// TypeScript interfaces matching FE.md
+// System state constants (matching backend protocol.zig)
+const SYSTEM_STATE_READY = 0
+const SYSTEM_STATE_BUSY = 1
+const SYSTEM_STATE_ERROR = 2
+const SYSTEM_STATE_WARNING = 3
+
+// Control mode constants (matching backend protocol.zig)
+const CONTROL_MODE_POSITION = 0
+const CONTROL_MODE_VELOCITY = 1
+const CONTROL_MODE_TORQUE = 2
+
+// TypeScript interfaces matching backend protocol
 interface JointState {
-  position: number[]      // Current joint positions (rad)
-  velocity: number[]      // Current joint velocities (rad/s)
+  position: number[]      // Current joint positions (degrees from backend)
+  velocity: number[]      // Current joint velocities (deg/s)
   torque: number[]       // Current joint torques (Nm)
   temperature: number[]   // Motor temperatures (°C)
   current: number[]      // Motor currents (A)
   timestamp: number      // Timestamp in microseconds
 }
 
+// Raw backend system status (uses numeric values)
+interface BackendSystemStatus {
+  state: number
+  error_code: string | null
+  safety_status: {
+    soft_limits_active: boolean
+    emergency_stop: boolean
+    collision_detected: boolean
+  }
+  control_mode: number
+}
+
+// Frontend-friendly system status (uses string values)
 interface SystemStatus {
   state: 'READY' | 'BUSY' | 'ERROR' | 'WARNING'
   errorCode: string | null
@@ -45,16 +69,49 @@ interface CollisionData {
   detected: boolean
   link1?: string
   link2?: string
-  position?: { x: number, y: number, z: number }
-  penetrationDepth?: number
-  contactNormal?: { x: number, y: number, z: number }
+  position?: [number, number, number]
+  penetration_depth?: number
+  contact_normal?: [number, number, number]
 }
 
 interface ConnectionStatus {
-  status: 'connected' | 'disconnected' | 'error'
-  message: string
+  status: string
+  message: string | null
   timestamp_us: number
 }
+
+// Helper to convert backend numeric state to frontend string
+const stateToString = (state: number): 'READY' | 'BUSY' | 'ERROR' | 'WARNING' => {
+  switch (state) {
+    case SYSTEM_STATE_READY: return 'READY'
+    case SYSTEM_STATE_BUSY: return 'BUSY'
+    case SYSTEM_STATE_ERROR: return 'ERROR'
+    case SYSTEM_STATE_WARNING: return 'WARNING'
+    default: return 'ERROR'
+  }
+}
+
+// Helper to convert backend numeric control mode to frontend string
+const controlModeToString = (mode: number): 'POSITION' | 'VELOCITY' | 'TORQUE' => {
+  switch (mode) {
+    case CONTROL_MODE_POSITION: return 'POSITION'
+    case CONTROL_MODE_VELOCITY: return 'VELOCITY'
+    case CONTROL_MODE_TORQUE: return 'TORQUE'
+    default: return 'POSITION'
+  }
+}
+
+// Convert backend system status to frontend format
+const convertSystemStatus = (backend: BackendSystemStatus): SystemStatus => ({
+  state: stateToString(backend.state),
+  errorCode: backend.error_code,
+  safetyStatus: {
+    softLimitsActive: backend.safety_status.soft_limits_active,
+    emergencyStop: backend.safety_status.emergency_stop,
+    collisionDetected: backend.safety_status.collision_detected
+  },
+  controlMode: controlModeToString(backend.control_mode)
+})
 
 type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error'
 
@@ -207,14 +264,26 @@ export function ZigController({ controlSignals, setControlSignals }: ZigControll
       } else if (typeof event.data === 'string') {
         // Text frame - JSON data (system status, collision, connection status)
         const jsonData = JSON.parse(event.data)
-        
+
         // Determine message type based on JSON structure
-        if (jsonData.state !== undefined && jsonData.controlMode !== undefined) {
-          // System status message
-          const status: SystemStatus = jsonData
+        if (jsonData.state !== undefined && jsonData.control_mode !== undefined) {
+          // System status message (uses snake_case from backend)
+          const backendStatus: BackendSystemStatus = jsonData
+          const status = convertSystemStatus(backendStatus)
           setSystemStatus(status)
+
+          // Update control signals with system status
+          setControlSignals((prev: any) => ({
+            ...prev,
+            systemStatus: status.state,
+            controlMode: status.controlMode,
+            emergencyStop: status.safetyStatus.emergencyStop,
+            collisionDetected: status.safetyStatus.collisionDetected,
+            errorCode: status.errorCode
+          }))
+
           setLastMessage(`System Status: ${status.state}`)
-        } else if (jsonData.detected !== undefined) {
+        } else if (jsonData.detected !== undefined && jsonData.link1 !== undefined) {
           // Collision data message
           const collision: CollisionData = jsonData
           setCollisionData(collision)

@@ -184,26 +184,53 @@ export function ControlPanel({ angles, onAngleChange, onMovementSelect, controlS
                 <div>
                   <h3 className="text-sm font-semibold mb-2">Motor Current (A)</h3>
                   <div className="grid grid-cols-7 gap-1">
-                    {controlSignals.motorCurrents.map((current, i) => (
+                    {(controlSignals.motorCurrents || [0,0,0,0,0,0,0]).map((current, i) => (
                       <div key={i} className="flex flex-col items-center">
                         <div className="text-xs text-gray-400">J{i + 1}</div>
-                        <div className="text-sm font-mono">{current.toFixed(1)}</div>
+                        <div className="text-sm font-mono">{(current || 0).toFixed(2)}</div>
                       </div>
                     ))}
                   </div>
                 </div>
 
                 <div>
-                  <h3 className="text-sm font-semibold mb-2">Sensor Readings</h3>
+                  <h3 className="text-sm font-semibold mb-2">Temperature (°C)</h3>
                   <div className="grid grid-cols-7 gap-1">
-                    {controlSignals.sensorReadings.map((reading, i) => (
+                    {(controlSignals.motorTemperatures || controlSignals.sensorReadings || [25,25,25,25,25,25,25]).map((temp, i) => (
                       <div key={i} className="flex flex-col items-center">
-                        <div className="text-xs text-gray-400">S{i + 1}</div>
-                        <div className="text-sm font-mono">{reading.toFixed(1)}</div>
+                        <div className="text-xs text-gray-400">J{i + 1}</div>
+                        <div className={`text-sm font-mono ${(temp || 0) > 60 ? 'text-red-400' : (temp || 0) > 45 ? 'text-yellow-400' : 'text-green-400'}`}>
+                          {(temp || 25).toFixed(1)}
+                        </div>
                       </div>
                     ))}
                   </div>
                 </div>
+
+                <div>
+                  <h3 className="text-sm font-semibold mb-2">Control Mode</h3>
+                  <Badge variant="outline" className="bg-blue-600/20 text-blue-400 border-blue-600">
+                    {controlSignals.controlMode || 'POSITION'}
+                  </Badge>
+                </div>
+
+                {controlSignals.emergencyStop && (
+                  <div className="bg-red-900/50 p-2 rounded border border-red-500">
+                    <h3 className="text-sm font-semibold text-red-400">EMERGENCY STOP ACTIVE</h3>
+                    <p className="text-xs text-red-300 mt-1">
+                      System halted. Reset required to continue operation.
+                    </p>
+                  </div>
+                )}
+
+                {controlSignals.collisionDetected && (
+                  <div className="bg-orange-900/30 p-2 rounded border border-orange-700">
+                    <h3 className="text-sm font-semibold text-orange-400">Collision Detected</h3>
+                    <p className="text-xs text-orange-300 mt-1">
+                      Robot stopped due to collision detection.
+                    </p>
+                  </div>
+                )}
 
                 {controlSignals.errorCode && (
                   <div className="bg-red-900/30 p-2 rounded border border-red-700">
@@ -211,6 +238,8 @@ export function ControlPanel({ angles, onAngleChange, onMovementSelect, controlS
                     <p className="text-xs text-red-300 mt-1">
                       {controlSignals.errorCode === "TEMP_HIGH"
                         ? "Motor temperature exceeding normal range. Check cooling system."
+                        : controlSignals.errorCode === "FAULT"
+                        ? "System fault detected. Check robot state."
                         : "Unknown error. Contact maintenance."}
                     </p>
                   </div>
@@ -222,7 +251,20 @@ export function ControlPanel({ angles, onAngleChange, onMovementSelect, controlS
           <div className="mt-4 pt-4 border-t border-white/20 text-xs text-white/60">
             <p>Camera: Click and drag to orbit. Scroll to zoom.</p>
             <p className="mt-1">
-              Zig microcontroller status: <span className="text-green-400">Connected</span>
+              Zig backend status:{" "}
+              <span className={
+                controlSignals.systemStatus === "READY" || controlSignals.systemStatus === "BUSY"
+                  ? "text-green-400"
+                  : controlSignals.systemStatus === "WARNING"
+                  ? "text-yellow-400"
+                  : controlSignals.systemStatus === "ERROR"
+                  ? "text-red-400"
+                  : "text-gray-400"
+              }>
+                {controlSignals.systemStatus === "READY" || controlSignals.systemStatus === "BUSY"
+                  ? "Connected"
+                  : controlSignals.systemStatus}
+              </span>
             </p>
           </div>
         </CardContent>

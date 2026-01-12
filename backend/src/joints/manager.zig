@@ -182,9 +182,35 @@ pub const JointManager = struct {
     }
 
     pub fn getRobotState(self: *JointManager) types.RobotState {
-        // TODO: Implement actual logic to determine robot state
-        _ = self; // Keep self until proper logic is added
-        return types.RobotState.ready; // Placeholder
+        // Check for emergency stop condition
+        if (self.safety_monitor.isEmergencyStop()) {
+            return types.RobotState.emergency_stop;
+        }
+
+        // Check if any joint is moving (has significant velocity)
+        const velocity_threshold: f32 = 0.1; // degrees/second
+        var is_moving = false;
+        for (self.joints) |joint| {
+            if (@abs(joint.current_velocity) > velocity_threshold) {
+                is_moving = true;
+                break;
+            }
+        }
+
+        if (is_moving) {
+            return types.RobotState.moving;
+        }
+
+        // Check for fault conditions (e.g., overtemperature)
+        const max_safe_temp: f32 = 80.0; // degrees Celsius
+        for (self.joints) |joint| {
+            if (joint.temperature > max_safe_temp) {
+                return types.RobotState.fault;
+            }
+        }
+
+        // Default to ready state
+        return types.RobotState.ready;
     }
 
     pub fn reset(self: *JointManager) void {
@@ -216,14 +242,14 @@ pub const JointManager = struct {
     }
 
     pub fn setTorques(self: *JointManager, torques: []const f32) !void {
-        // TODO: Implement actual logic, possibly check control mode first
         if (torques.len != types.NUM_JOINTS) {
             return error.InvalidNumberOfTorques;
         }
         for (&self.joints, torques) |*joint, torque| {
             joint.target_torque = torque;
         }
-        self.control_mode = types.ControlMode.position;
+        // Switch to torque control mode when setting torques
+        self.control_mode = types.ControlMode.torque;
     }
 
     pub fn setControlMode(self: *JointManager, mode: types.ControlMode, params: anytype) !void {

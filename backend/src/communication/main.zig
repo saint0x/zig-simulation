@@ -49,37 +49,49 @@ const UpdateThread = struct {
 
     fn run(self: *UpdateThread) !void {
         var timer = try time.Timer.start();
+        var last_joint_update: u64 = 0;
         var last_status_update: u64 = 0;
-        // var last_collision_check: u64 = 0; // Temporarily unused for debugging
-        const update_interval_ns = time.ns_per_ms; // 1kHz
-        const status_interval_ns = 10 * time.ns_per_ms; // 100Hz
-        // const collision_interval_ns = 10 * time.ns_per_ms; // 100Hz // Temporarily unused for debugging
+        var last_collision_check: u64 = 0;
+        const joint_interval_ns = time.ns_per_ms; // 1kHz for joint states
+        const status_interval_ns = 10 * time.ns_per_ms; // 100Hz for system status
+        const collision_interval_ns = 10 * time.ns_per_ms; // 100Hz for collision checks
 
         while (self.running) {
             const now = timer.read();
 
-            // TEMPORARILY DISABLED: Joint state updates (1kHz) for debugging
-            // try self.sendJointStates();
+            // Joint state updates (1kHz) - high frequency for smooth visualization
+            if (now - last_joint_update >= joint_interval_ns) {
+                self.sendJointStates() catch |err| {
+                    std.log.warn("Failed to send joint states: {}", .{err});
+                };
+                last_joint_update = now;
+            }
 
-            // System status updates (100Hz) - reduced frequency for debugging
-            if (now - last_status_update >= status_interval_ns * 10) { // 10Hz instead of 100Hz
-                try self.sendSystemStatus();
+            // System status updates (100Hz)
+            if (now - last_status_update >= status_interval_ns) {
+                self.sendSystemStatus() catch |err| {
+                    std.log.warn("Failed to send system status: {}", .{err});
+                };
                 last_status_update = now;
             }
 
-            // TEMPORARILY DISABLED: Collision detection updates for debugging
-            // if (now - last_collision_check >= collision_interval_ns) {
-            //     try self.checkAndSendCollisions();
-            //     last_collision_check = now;
-            // }
+            // Collision detection updates (100Hz)
+            if (now - last_collision_check >= collision_interval_ns) {
+                self.checkAndSendCollisions() catch |err| {
+                    std.log.warn("Failed to send collision data: {}", .{err});
+                };
+                last_collision_check = now;
+            }
 
             // Process any pending commands
-            try self.processCommands();
+            self.processCommands() catch |err| {
+                std.log.warn("Failed to process commands: {}", .{err});
+            };
 
-            // Sleep until next update
+            // Sleep until next update cycle
             const elapsed = timer.read() - now;
-            if (elapsed < update_interval_ns) {
-                time.sleep(update_interval_ns - elapsed);
+            if (elapsed < joint_interval_ns) {
+                time.sleep(joint_interval_ns - elapsed);
             }
         }
     }

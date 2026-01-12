@@ -4,19 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a KUKA robotic arm simulation project with a Zig backend for real-time control and physics simulation, and a Next.js/React frontend for 3D visualization and user interface.
+This is a KUKA robotic arm simulation project with a Zig backend for real-time control and physics simulation, and a Vite/React/Three.js frontend for 3D visualization and user interface.
 
 ## Commands
 
 ### Frontend Development
-- **Development server**: `npm run dev` or `bun dev`
+- **Development server**: `npm run dev`
 - **Build**: `npm run build`
+- **Preview production build**: `npm run preview`
 - **Linting**: `npm run lint`
-- **Production start**: `npm run start`
 
 ### Backend Development
 - **Build**: `cd backend && zig build`
 - **Run**: `cd backend && zig build run`
+- **Run tests**: `cd backend && zig build test`
 - **Clean**: `cd backend && rm -rf zig-cache zig-out`
 
 ## Architecture
@@ -31,8 +32,8 @@ The backend is structured as a modular system with clear dependency hierarchy:
 
 **Physics & Kinematics**:
 - `kinematics/`: Forward/inverse kinematics and collision detection
-- `physics/`: Dynamics simulation and motor modeling
-- `safety/`: Monitoring, limits, and emergency stop systems
+- `physics/`: Dynamics simulation with motor modeling, thermal, and electrical models
+- `safety/`: Monitoring, limits, emergency stop, and safety enable/disable
 
 **Control System**:
 - `control/`: PID controllers, motion planning, and joint management
@@ -42,6 +43,7 @@ The backend is structured as a modular system with clear dependency hierarchy:
 **Communication**:
 - `communication/`: WebSocket server with binary protocol
 - Protocol runs on port 9001 with mixed binary/JSON messaging
+- 1kHz joint state updates (binary), 100Hz system status (JSON)
 
 **Module Dependencies** (defined in build.zig:18-98):
 ```
@@ -52,48 +54,85 @@ utils (base) → timing → kinematics → safety → control → core → joint
                                    communication
 ```
 
-### Frontend (Next.js/React/Three.js)
+### Frontend (Vite/React/Three.js)
 The frontend provides 3D visualization and control interface:
 
-**Key Components**:
-- `robot-arm.tsx`: Main 3D robot model using React Three Fiber
-- `robot-arm-simulation.tsx`: Simulation environment and physics integration
-- `zig-controller.tsx`: Backend communication bridge (WebSocket)
-- `control-panel.tsx`: User controls and command interface
-- `info-panel.tsx`: Status display and system information
+**Key Components** (`src/components/`):
+- `robot-arm.tsx`: Main 3D robot model using React Three Fiber with spring animations
+- `robot-arm-simulation.tsx`: Simulation environment, backend integration, command dispatching
+- `zig-controller.tsx`: WebSocket client, binary/JSON parsing, command serialization
+- `control-panel.tsx`: User controls, sliders, presets, and diagnostics display
+- `info-panel.tsx`: Static system information display
 
 **Libraries**:
+- Vite for build tooling
 - React Three Fiber for 3D rendering
+- @react-three/cannon for physics objects
 - Tailwind CSS for styling
 - Radix UI components for interface elements
-- React Hook Form for form handling
 
 ### Data Flow
-- Backend sends joint states at 1kHz, system status at 100Hz
-- Frontend receives data via WebSocket and updates 3D visualization
-- Commands flow from frontend controls to backend via JSON messages
-- Binary protocol for high-frequency joint state data, JSON for commands and status
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         BACKEND (Zig)                           │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────────┐  │
+│  │ Physics Sim  │───▶│Joint Manager │───▶│ WebSocket Server │  │
+│  │ (1kHz loop)  │    │              │    │   (port 9001)    │  │
+│  └──────────────┘    └──────────────┘    └────────┬─────────┘  │
+│                                                    │            │
+└────────────────────────────────────────────────────┼────────────┘
+                                                     │
+                        WebSocket (binary + JSON)    │
+                                                     ▼
+┌────────────────────────────────────────────────────┼────────────┐
+│                       FRONTEND (React)             │            │
+│  ┌──────────────────┐    ┌─────────────────────────▼──────────┐│
+│  │ Robot Arm (3D)   │◀───│       ZigController                ││
+│  │ visualization    │    │  - Binary joint state parsing      ││
+│  └──────────────────┘    │  - JSON status parsing             ││
+│          ▲               │  - Command serialization           ││
+│          │               └─────────────────────────────────────┘│
+│  ┌───────┴──────────┐                                          │
+│  │ Robot Simulation │◀──────────────────────────────────────────│
+│  │  - Target angles │    ┌─────────────────────────────────────┐│
+│  │  - Actual angles │    │         Control Panel               ││
+│  │  - Backend sync  │◀───│  - Slider controls                  ││
+│  └──────────────────┘    │  - Preset movements                 ││
+│                          │  - Diagnostics display              ││
+│                          └─────────────────────────────────────┘│
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Message Flow**:
+- Backend → Frontend: Joint states (binary, 1kHz), System status (JSON, 100Hz), Collision data (JSON)
+- Frontend → Backend: Position commands (JSON), Control mode changes (JSON), Safety commands (JSON)
 
 ## Integration Points
 
 The system is designed for real-time integration where:
 1. Backend is the authoritative source for all robot physics and state
-2. Frontend acts as visualization and user interface layer
-3. Communication happens via WebSocket on localhost:9001
-4. Frontend interpolates between backend updates for smooth 60fps rendering
+2. Frontend displays actual joint positions received from backend
+3. User inputs set target positions, which are sent as commands to backend
+4. Communication happens via WebSocket on localhost:9001
+5. Frontend uses spring animations for smooth interpolation between updates
 
 ## Important Files
 
-- `backend/src/main.zig:12-167`: Main control loop and system initialization
-- `backend/build.zig:18-98`: Module dependency configuration
-- `INTEGRATION.md`: Detailed integration plan and protocol specifications
-- `FE.md`: Frontend architecture and interface definitions
-- `backend/BE.md`: Backend implementation details and phases
+- `backend/src/main.zig`: Main control loop with signal handling for graceful shutdown
+- `backend/src/communication/main.zig`: WebSocket server and message dispatching
+- `backend/src/joints/manager.zig`: Joint state management and physics integration
+- `backend/src/safety/safety_monitor.zig`: Safety monitoring with enable/disable/e-stop
+- `backend/build.zig`: Module dependency configuration
+- `src/components/robot-arm-simulation.tsx`: Main frontend component with backend integration
+- `src/components/zig-controller.tsx`: WebSocket client and protocol handling
 
 ## Development Notes
 
 - Backend uses 1ms control loops for real-time performance
-- All physics calculations are deterministic and use fixed-point math where appropriate
-- Safety systems include collision detection, joint limits, and emergency stops
-- Frontend removes local physics simulation in favor of backend authority
-- Protocol handles mixed binary (joint states) and JSON (commands/status) messaging
+- Graceful shutdown: Ctrl+C or SIGTERM triggers clean shutdown sequence
+- Safety system is enabled by default; can be disabled for testing
+- Physics simulation includes motor dynamics, thermal modeling, and sensor noise
+- Frontend automatically reconnects on WebSocket disconnection
+- Target angles (user input) and actual angles (backend state) are tracked separately
+- When backend is disconnected, frontend falls back to showing target angles
