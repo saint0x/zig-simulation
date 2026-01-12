@@ -1,6 +1,7 @@
-//! By convention, main.zig is where your main function lives in the case that
-//! you are building an executable. If you are making a library, the convention
-//! is to delete this file and start with root.zig instead.
+//! KUKA Robot Arm Control System - Main Entry Point
+//!
+//! This is the production entry point for the KUKA robot arm simulation backend.
+//! It initializes all subsystems and runs the 1kHz real-time control loop.
 
 const std = @import("std");
 const core = @import("core");
@@ -8,6 +9,30 @@ const joints = @import("joints");
 const safety = @import("safety");
 const kinematics = @import("kinematics");
 const communication = @import("communication");
+const posix = std.posix;
+
+// Global shutdown flag for signal handling (atomic for thread safety)
+var g_shutdown_requested = std.atomic.Value(bool).init(false);
+
+/// Signal handler for graceful shutdown (SIGINT, SIGTERM)
+fn signalHandler(sig: i32) callconv(.C) void {
+    _ = sig;
+    g_shutdown_requested.store(true, .seq_cst);
+}
+
+/// Setup signal handlers for graceful shutdown
+fn setupSignalHandlers() !void {
+    const sigaction_handler = posix.Sigaction{
+        .handler = .{ .handler = signalHandler },
+        .mask = posix.empty_sigset,
+        .flags = 0,
+    };
+
+    // Handle SIGINT (Ctrl+C)
+    try posix.sigaction(posix.SIG.INT, &sigaction_handler, null);
+    // Handle SIGTERM (kill command)
+    try posix.sigaction(posix.SIG.TERM, &sigaction_handler, null);
+}
 
 pub fn main() !void {
     // Initialize timing system for 1kHz control loop (1ms interval)
@@ -143,17 +168,20 @@ pub fn main() !void {
 
     std.log.info("WebSocket server started on port {d}", .{web_socket_port});
 
+    // Setup signal handlers for graceful shutdown
+    setupSignalHandlers() catch |err| {
+        std.log.warn("Failed to setup signal handlers: {} - shutdown may not be graceful", .{err});
+    };
+
     // Power up the robot
     joint_manager.reset();
-    
-    // Add graceful shutdown handling
-    const running: bool = true;
+
     var iteration_count: u64 = 0;
 
-    std.log.info("Starting main control loop (production mode - infinite loop)", .{});
+    std.log.info("Starting main control loop (press Ctrl+C to shutdown gracefully)", .{});
 
-    // Main control loop - production mode
-    while (running) {
+    // Main control loop - production mode with graceful shutdown support
+    while (!g_shutdown_requested.load(.seq_cst)) {
         // Wait for next control cycle
         const current_time: i64 = @intCast(std.time.nanoTimestamp());
         if (!timing.shouldUpdate(current_time)) continue;
@@ -162,25 +190,27 @@ pub fn main() !void {
         joint_manager.updateStates() catch |err| {
             std.log.err("Joint update error: {}", .{err});
             if (err == error.SafetyLimitExceeded) {
-                std.log.warn("Safety limits exceeded - continuing with caution", .{});
-                // Reset to safe state instead of crashing
+                std.log.warn("Safety limits exceeded - resetting to safe state", .{});
                 joint_manager.reset();
                 continue;
             }
             break; // Exit on other errors
         };
-        
+
         iteration_count += 1;
-        
+
         // Periodic status logging (every 10 seconds at 1kHz = 10000 iterations)
         if (iteration_count % 10000 == 0) {
             std.log.info("Control loop running: {} iterations completed", .{iteration_count});
         }
     }
-    
-    std.log.info("Main control loop completed. Shutting down...", .{});
-    
+
+    std.log.info("Shutdown requested. Completing {} iterations...", .{iteration_count});
+    std.log.info("Stopping WebSocket server...", .{});
+
     // Proper shutdown sequence: stop server first, then wait for thread
     comm_server.stop();
     server_thread.join();
+
+    std.log.info("Shutdown complete.", .{});
 }

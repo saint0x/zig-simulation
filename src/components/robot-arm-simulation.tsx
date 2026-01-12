@@ -1,4 +1,4 @@
-import { useState, useEffect, Suspense } from "react"
+import { useState, useEffect, useCallback, Suspense } from "react"
 import { Canvas } from "@react-three/fiber"
 import { OrbitControls, Environment, PerspectiveCamera, ContactShadows, Text } from "@react-three/drei"
 import { RobotArm } from "./robot-arm"
@@ -7,8 +7,41 @@ import { Physics, useBox, usePlane, useSphere } from "@react-three/cannon"
 import { InfoPanel } from "./info-panel"
 import { ZigController } from "./zig-controller"
 
+// Joint angle interface matching the 7-DOF KUKA arm
+interface ArmAngles {
+  baseRotation: number
+  shoulderRotation: number
+  elbowRotation: number
+  wristBendRotation: number
+  wristRotation: number
+  toolRotation: number
+  gripperRotation: number
+}
+
+// Control signals received from backend
+interface ControlSignals {
+  // Joint state data from backend (degrees)
+  jointPositions?: number[]
+  jointVelocities?: number[]
+  jointTorques?: number[]
+  motorTemperatures?: number[]
+  motorCurrents?: number[]
+  timestamp?: number
+  // System status
+  systemStatus: string
+  controlMode?: string
+  emergencyStop?: boolean
+  collisionDetected?: boolean
+  errorCode: string | null
+  // Legacy fields for compatibility
+  sensorReadings: number[]
+  // Function to send commands to backend
+  sendJointCommand?: (positions: number[], maxVelocity?: number[]) => void
+}
+
 export default function RobotArmSimulation() {
-  const [armAngles, setArmAngles] = useState({
+  // Target angles set by user (degrees) - these are sent to backend
+  const [targetAngles, setTargetAngles] = useState<ArmAngles>({
     baseRotation: 0,
     shoulderRotation: 0,
     elbowRotation: 0,
@@ -18,15 +51,30 @@ export default function RobotArmSimulation() {
     gripperRotation: 0,
   })
 
-  const [controlSignals, setControlSignals] = useState({
+  // Actual angles from backend (degrees) - these drive the visualization
+  const [actualAngles, setActualAngles] = useState<ArmAngles>({
+    baseRotation: 0,
+    shoulderRotation: 0,
+    elbowRotation: 0,
+    wristBendRotation: 0,
+    wristRotation: 0,
+    toolRotation: 0,
+    gripperRotation: 0,
+  })
+
+  // Control signals from backend
+  const [controlSignals, setControlSignals] = useState<ControlSignals>({
     motorCurrents: [0, 0, 0, 0, 0, 0, 0],
     sensorReadings: [0, 0, 0, 0, 0, 0, 0],
-    systemStatus: "READY",
+    systemStatus: "CONNECTING",
     errorCode: null,
   })
 
-  // Predefined movements
-  const movements = {
+  // Track if we're connected to backend
+  const [isBackendConnected, setIsBackendConnected] = useState(false)
+
+  // Predefined movements (target positions in degrees)
+  const movements: Record<string, ArmAngles> = {
     rest: {
       baseRotation: 0,
       shoulderRotation: 0,
@@ -74,35 +122,70 @@ export default function RobotArmSimulation() {
     },
   }
 
-  // Simulate Zig controller communication
+  // Update actual angles when backend sends joint positions
   useEffect(() => {
-    const interval = setInterval(() => {
-      // Simulate motor current based on joint movement
-      const newMotorCurrents = Object.values(armAngles).map((angle) => Math.abs(angle) * 0.1 + Math.random() * 0.5)
-
-      // Simulate sensor readings
-      const newSensorReadings = newMotorCurrents.map((current) => current + (Math.random() - 0.5) * 0.2)
-
-      setControlSignals({
-        motorCurrents: newMotorCurrents,
-        sensorReadings: newSensorReadings,
-        systemStatus: Math.random() > 0.98 ? "WARNING" : "READY",
-        errorCode: Math.random() > 0.98 ? "TEMP_HIGH" : null,
+    if (controlSignals.jointPositions && controlSignals.jointPositions.length >= 7) {
+      setActualAngles({
+        baseRotation: controlSignals.jointPositions[0],
+        shoulderRotation: controlSignals.jointPositions[1],
+        elbowRotation: controlSignals.jointPositions[2],
+        wristBendRotation: controlSignals.jointPositions[3],
+        wristRotation: controlSignals.jointPositions[4],
+        toolRotation: controlSignals.jointPositions[5],
+        gripperRotation: controlSignals.jointPositions[6],
       })
-    }, 500)
-
-    return () => clearInterval(interval)
-  }, [armAngles])
-
-  const handleAngleChange = (joint, value) => {
-    setArmAngles((prev) => ({ ...prev, [joint]: value }))
-  }
-
-  const executeMovement = (movementName) => {
-    if (movements[movementName]) {
-      setArmAngles(movements[movementName])
+      setIsBackendConnected(true)
     }
-  }
+  }, [controlSignals.jointPositions])
+
+  // Track connection status
+  useEffect(() => {
+    if (controlSignals.systemStatus === "READY" || controlSignals.systemStatus === "BUSY") {
+      setIsBackendConnected(true)
+    } else if (controlSignals.systemStatus === "CONNECTING") {
+      setIsBackendConnected(false)
+    }
+  }, [controlSignals.systemStatus])
+
+  // Send command to backend when target angles change
+  const sendCommandToBackend = useCallback((angles: ArmAngles) => {
+    if (controlSignals.sendJointCommand) {
+      const positions = [
+        angles.baseRotation,
+        angles.shoulderRotation,
+        angles.elbowRotation,
+        angles.wristBendRotation,
+        angles.wristRotation,
+        angles.toolRotation,
+        angles.gripperRotation,
+      ]
+      // Send with default max velocity (backend will use limits)
+      controlSignals.sendJointCommand(positions)
+    }
+  }, [controlSignals.sendJointCommand])
+
+  // Handle user changing a joint angle via slider
+  const handleAngleChange = useCallback((joint: keyof ArmAngles, value: number) => {
+    setTargetAngles((prev) => {
+      const newAngles = { ...prev, [joint]: value }
+      // Send command to backend
+      sendCommandToBackend(newAngles)
+      return newAngles
+    })
+  }, [sendCommandToBackend])
+
+  // Handle preset movement selection
+  const executeMovement = useCallback((movementName: string) => {
+    if (movements[movementName]) {
+      const newAngles = movements[movementName]
+      setTargetAngles(newAngles)
+      // Send command to backend
+      sendCommandToBackend(newAngles)
+    }
+  }, [movements, sendCommandToBackend])
+
+  // Decide which angles to show: use actual backend angles if connected, otherwise target angles
+  const displayAngles = isBackendConnected ? actualAngles : targetAngles
 
   return (
     <div className="relative w-full h-screen bg-gradient-to-b from-gray-900 to-gray-800">
@@ -139,8 +222,8 @@ export default function RobotArmSimulation() {
             restitution: 0.2,
           }}
         >
-          {/* Robot arm */}
-          <RobotArm position={[0, 0, 0]} angles={armAngles} controlSignals={controlSignals} />
+          {/* Robot arm - uses backend angles when connected */}
+          <RobotArm position={[0, 0, 0]} angles={displayAngles} controlSignals={controlSignals} />
 
           {/* Floor with shadows */}
           <Floor />
@@ -174,8 +257,9 @@ export default function RobotArmSimulation() {
         <OrbitControls enableDamping dampingFactor={0.05} />
       </Canvas>
 
+      {/* Control panel - shows target angles for user input */}
       <ControlPanel
-        angles={armAngles}
+        angles={targetAngles}
         onAngleChange={handleAngleChange}
         onMovementSelect={executeMovement}
         controlSignals={controlSignals}
@@ -183,6 +267,7 @@ export default function RobotArmSimulation() {
 
       <InfoPanel />
 
+      {/* Zig backend controller - manages WebSocket connection */}
       <ZigController controlSignals={controlSignals} setControlSignals={setControlSignals} />
     </div>
   )
@@ -245,8 +330,8 @@ function InteractiveObjects() {
   )
 }
 
-function Box({ position, color, size = [0.5, 0.5, 0.5] }) {
-  const [ref, api] = useBox(() => ({
+function Box({ position, color, size = [0.5, 0.5, 0.5] }: { position: [number, number, number], color: string, size?: [number, number, number] }) {
+  const [ref] = useBox(() => ({
     mass: 1,
     position,
     args: size,
@@ -260,8 +345,8 @@ function Box({ position, color, size = [0.5, 0.5, 0.5] }) {
   )
 }
 
-function Sphere({ position, color, radius = 0.5 }) {
-  const [ref, api] = useSphere(() => ({
+function Sphere({ position, color, radius = 0.5 }: { position: [number, number, number], color: string, radius?: number }) {
+  const [ref] = useSphere(() => ({
     mass: 1,
     position,
     args: [radius],
@@ -275,8 +360,8 @@ function Sphere({ position, color, radius = 0.5 }) {
   )
 }
 
-function Cylinder({ position, color }) {
-  const [ref, api] = useBox(() => ({
+function Cylinder({ position, color }: { position: [number, number, number], color: string }) {
+  const [ref] = useBox(() => ({
     mass: 1,
     position,
     args: [0.2, 0.3, 0.2],
@@ -289,4 +374,3 @@ function Cylinder({ position, color }) {
     </mesh>
   )
 }
-

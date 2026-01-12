@@ -1,28 +1,52 @@
 # Frontend Architecture and Integration Plan
 
+## Tech Stack
+- **Build Tool**: Vite
+- **Framework**: React 18
+- **3D Rendering**: React Three Fiber, @react-three/drei, @react-three/cannon
+- **Styling**: Tailwind CSS
+- **UI Components**: Radix UI
+
 ## Current Frontend Components
-- `robot-arm.tsx`: Main 3D model and joint management
-- `robot-arm-simulation.tsx`: Simulation environment and physics
-- `zig-controller.tsx`: Backend communication bridge
-- `control-panel.tsx`: User interface for control
-- `info-panel.tsx`: Status and feedback display
+
+### Core Components (`src/components/`)
+- `robot-arm.tsx`: Main 3D model with 7-DOF joint hierarchy and spring animations
+- `robot-arm-simulation.tsx`: Simulation environment, backend integration, command dispatching
+- `zig-controller.tsx`: WebSocket client, binary/JSON parsing, command serialization
+- `control-panel.tsx`: User interface with manual control, presets, and diagnostics
+- `info-panel.tsx`: Static system information display
 
 ## Backend-Frontend Interface
 
 ### Data Flow FROM Backend
-1. **Joint State Updates** (1kHz)
+
+1. **Joint State Updates** (1kHz, Binary)
    ```typescript
    interface JointState {
-     position: number[];      // Current joint positions (rad)
-     velocity: number[];      // Current joint velocities (rad/s)
-     torque: number[];       // Current joint torques (Nm)
+     position: number[];      // Joint positions (degrees)
+     velocity: number[];      // Joint velocities (deg/s)
+     torque: number[];        // Joint torques (Nm)
      temperature: number[];   // Motor temperatures (°C)
-     current: number[];      // Motor currents (A)
+     current: number[];       // Motor currents (A)
+     timestamp: number;       // Timestamp in microseconds
    }
    ```
 
-2. **System Status** (100Hz)
+2. **System Status** (100Hz, JSON)
    ```typescript
+   // Backend sends numeric values
+   interface BackendSystemStatus {
+     state: number;           // 0=READY, 1=BUSY, 2=ERROR, 3=WARNING
+     error_code: string | null;
+     safety_status: {
+       soft_limits_active: boolean;
+       emergency_stop: boolean;
+       collision_detected: boolean;
+     };
+     control_mode: number;    // 0=POSITION, 1=VELOCITY, 2=TORQUE
+   }
+
+   // Frontend converts to string enum
    interface SystemStatus {
      state: 'READY' | 'BUSY' | 'ERROR' | 'WARNING';
      errorCode: string | null;
@@ -35,34 +59,35 @@
    }
    ```
 
-3. **Collision Data** (On Change)
+3. **Collision Data** (100Hz when detected, JSON)
    ```typescript
    interface CollisionData {
      detected: boolean;
      link1: string;
      link2: string;
-     position: Vector3;
-     penetrationDepth: number;
-     contactNormal: Vector3;
+     position: [number, number, number];
+     penetration_depth: number;
+     contact_normal: [number, number, number];
    }
    ```
 
 ### Data Flow TO Backend
-1. **Joint Commands**
+
+1. **Position Commands** (JSON)
    ```typescript
-   interface JointCommand {
-     type: 'POSITION' | 'VELOCITY' | 'TORQUE';
-     values: number[];
-     maxVelocity?: number[];
-     maxAcceleration?: number[];
+   interface PositionCommand {
+     type: 0;                 // COMMAND_TYPE_POSITION
+     values: number[];        // Target positions (degrees)
+     max_velocity?: number[]; // Optional max velocities
    }
    ```
 
-2. **Control Mode Changes**
+2. **Control Mode Changes** (JSON)
    ```typescript
-   interface ControlModeRequest {
-     mode: 'POSITION' | 'VELOCITY' | 'TORQUE';
-     parameters: {
+   interface ControlModeCommand {
+     type: 3;                 // COMMAND_TYPE_CONTROL_MODE
+     control_mode: number;    // 0=POSITION, 1=VELOCITY, 2=TORQUE
+     parameters?: {
        stiffness?: number;
        damping?: number;
        feedforward?: boolean;
@@ -70,87 +95,99 @@
    }
    ```
 
-3. **Safety Commands**
+3. **Safety Commands** (JSON)
    ```typescript
    interface SafetyCommand {
-     type: 'ENABLE' | 'DISABLE' | 'RESET' | 'E_STOP';
-     zoneId?: string;
+     type: 4;                 // COMMAND_TYPE_SAFETY
+     safety: {
+       type: number;         // 0=ENABLE, 1=DISABLE, 2=RESET, 3=E_STOP
+       zone_id?: string;
+     };
    }
    ```
 
-## Required Frontend Updates
+## Implementation Status
 
-### 1. Visual Feedback Enhancements
+### Completed Features
+- [x] WebSocket connection with auto-reconnect
+- [x] Binary protocol parsing for joint states
+- [x] JSON parsing for system status with numeric->string conversion
+- [x] Joint position command sending
+- [x] Real-time 3D visualization with spring animations
+- [x] Manual control sliders (7 joints)
+- [x] Preset movement buttons
+- [x] Diagnostics panel with temperature and current display
+- [x] Connection status indicator
+- [x] Emergency stop and collision detection alerts
+
+### Future Enhancements
 - [ ] Add motor temperature visualization (color gradient on joints)
 - [ ] Implement torque visualization (arrows/force indicators)
-- [ ] Add collision warning indicators
-- [ ] Show safety zones and limits
+- [ ] Add safety zone visualization
 - [ ] Add trajectory preview visualization
+- [ ] Real-time plotting of joint data
+- [ ] Advanced trajectory planning interface
+- [ ] Unit tests for protocol handling
+- [ ] Performance benchmarking
 
-### 2. Physics Integration
-- [ ] Remove current basic physics simulation
-- [ ] Update joint positions based on backend data only
-- [ ] Keep collision detection for visual objects only
-- [ ] Implement smooth interpolation between backend updates
+## Architecture
 
-### 3. UI/UX Improvements
-- [ ] Add detailed motor status panels
-- [ ] Implement advanced trajectory planning interface
-- [ ] Add safety zone configuration UI
-- [ ] Create error and warning notification system
-- [ ] Add real-time plotting of joint data
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    RobotArmSimulation                       │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │ State:                                                  ││
+│  │  - targetAngles (user input)                           ││
+│  │  - actualAngles (from backend)                         ││
+│  │  - controlSignals (backend data + sendJointCommand)    ││
+│  │  - isBackendConnected                                  ││
+│  └─────────────────────────────────────────────────────────┘│
+│                            │                                │
+│         ┌──────────────────┼──────────────────┐            │
+│         ▼                  ▼                  ▼            │
+│  ┌─────────────┐  ┌──────────────┐  ┌────────────────┐    │
+│  │  RobotArm   │  │ControlPanel  │  │ ZigController  │    │
+│  │  (3D viz)   │  │ (UI inputs)  │  │ (WebSocket)    │    │
+│  │             │  │              │  │                │    │
+│  │ angles prop │  │ angles prop  │  │ setControl-    │    │
+│  │ from parent │  │ onAngle-     │  │ Signals        │    │
+│  │             │  │ Change()     │  │ callback       │    │
+│  └─────────────┘  └──────────────┘  └────────────────┘    │
+└─────────────────────────────────────────────────────────────┘
+```
 
-### 4. Backend Communication
-- [ ] Replace mock ZigController with real WebSocket connection
-- [ ] Implement binary protocol parsing/serialization
-- [ ] Add connection status monitoring
-- [ ] Implement command queuing and synchronization
-- [ ] Add automatic reconnection handling
+### Data Flow
 
-### 5. Testing & Validation
-- [ ] Add unit tests for protocol handling
-- [ ] Implement connection loss simulation
-- [ ] Add error condition testing
-- [ ] Create visual regression tests
-- [ ] Add performance benchmarking
+1. **User Input Flow**:
+   - User moves slider → `handleAngleChange()` → updates `targetAngles`
+   - → calls `sendCommandToBackend()` → `sendJointCommand()` → WebSocket
+
+2. **Backend Data Flow**:
+   - WebSocket receives binary frame → `deserializeJointState()`
+   - → updates `controlSignals.jointPositions`
+   - → `useEffect` updates `actualAngles`
+   - → `displayAngles` = `actualAngles` when connected
+
+3. **Fallback Flow**:
+   - When backend disconnected, `displayAngles` = `targetAngles`
+   - Robot visualization continues showing last target positions
 
 ## Performance Requirements
+
 1. **Rendering**: Maintain 60fps during all operations
 2. **Update Rates**:
-   - Joint position updates: 60Hz visual update
+   - Backend data: 1kHz (throttled to 60Hz for rendering)
    - Status display: 10Hz refresh
-   - Control input: 100Hz sampling
+   - Control input: Immediate on slider change
 3. **Latency**:
-   - Command to visual feedback: <50ms
-   - Error condition to display: <100ms
-   - UI interaction to response: <16ms
+   - Command to backend: <10ms (WebSocket send)
+   - Backend data to visualization: <16ms (next frame)
 
-## Integration Timeline
-1. **Phase 1**: Basic Communication
-   - Implement WebSocket connection
-   - Basic joint state visualization
-   - Simple command interface
+## Development Notes
 
-2. **Phase 2**: Enhanced Visualization
-   - Temperature and torque displays
-   - Safety zone visualization
-   - Trajectory preview
-
-3. **Phase 3**: Advanced Features
-   - Complete control panel
-   - Full error handling
-   - Performance optimization
-
-4. **Phase 4**: Testing & Polish
-   - Comprehensive testing
-   - UI polish
-   - Performance tuning
-
-## Notes for Developers
-- All 3D visualizations should use Three.js with React Three Fiber
-- Use TypeScript for all new components
-- Follow the existing component structure
-- Maintain real-time capability with proper React optimization
-- Use React Suspense for loading states
-- Implement proper error boundaries
-- Follow the existing styling system (Tailwind CSS) 
+- All 3D visualizations use React Three Fiber
+- TypeScript for type safety
+- Tailwind CSS for styling
+- Spring animations provide smooth joint movement
+- React.memo and useCallback for performance optimization
+- Connection status and error handling throughout
